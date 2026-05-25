@@ -1,0 +1,159 @@
+# DNS di default; sovrascritti da docker-dns.override.yml generato dalle impostazioni
+x-app-dns: &app-dns
+  dns:
+    - ${DOCKER_DNS_1:-208.67.222.222}
+    - ${DOCKER_DNS_2:-208.67.220.220}
+
+services:
+  api:
+    <<: *app-dns
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: mx-api
+    environment:
+      - API_PORT=8000
+      - DATA_DIR=/data
+      - MAIL_DOMAIN=${MAIL_DOMAIN}
+      - POSTFIX_HOSTNAME=${POSTFIX_HOSTNAME}
+      - POSTFIX_SMTP_TLS=${POSTFIX_SMTP_TLS:-false}
+      - PUBLIC_HOSTNAME=${PUBLIC_HOSTNAME:-}
+      - PUBLIC_IPV4=${PUBLIC_IPV4:-}
+      - DKIM_SELECTOR=${DKIM_SELECTOR:-mail}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRE_MINUTES=${JWT_EXPIRE_MINUTES:-480}
+      - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - MFA_ISSUER=${MFA_ISSUER:-Mail Exchange}
+      - SYNC_SHARED_SECRET=${SYNC_SHARED_SECRET:-}
+      - SYNC_TLS_VERIFY=${SYNC_TLS_VERIFY:-true}
+      - SYNC_HTTPS_PORT=${SYNC_HTTPS_PORT:-60443}
+      - COMPOSE_PROJECT_DIR=/compose
+      - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-}
+    volumes:
+      - mail-data:/data
+      # Riavvio servizi da pannello admin: socket Docker (ro) + CLI nel container api
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Compose del progetto (read-only) per applicare DNS/Caddy dopo impostazioni pubbliche
+      - ${COMPOSE_HOST_DIR:-.}:/compose:ro
+    networks:
+      - mxnet
+    restart: unless-stopped
+
+  frontend:
+    <<: *app-dns
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: mx-frontend
+    depends_on:
+      - api
+    networks:
+      - mxnet
+    restart: unless-stopped
+
+  caddy:
+    <<: *app-dns
+    build:
+      context: .
+      dockerfile: infra/caddy/Dockerfile
+    container_name: mx-caddy
+    command: ["run", "--config", "/mail-exchange-data/generated/Caddyfile", "--adapter", "caddyfile"]
+    ports:
+      - "${CADDY_HTTP_PORT:-60080}:80"
+      - "${CADDY_HTTPS_PORT:-60443}:443"
+    volumes:
+      - mail-data:/mail-exchange-data:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+    networks:
+      - mxnet
+    restart: unless-stopped
+
+  postfix:
+    <<: *app-dns
+    build:
+      context: .
+      dockerfile: infra/postfix/Dockerfile
+    container_name: mx-postfix
+    environment:
+      - MAIL_DOMAIN=${MAIL_DOMAIN}
+      - MYHOSTNAME=${POSTFIX_HOSTNAME}
+      - MYNETWORKS=${MYNETWORKS}
+    ports:
+      - "${SMTP_PUBLISHED_PORT:-2525}:25"
+      - "${SUBMISSION_PUBLISHED_PORT:-1587}:587"
+    volumes:
+      - mail-data:/data
+      - postfix-spool:/var/spool/postfix
+      # ACME certs from Caddy (read-only) for inbound smtpd STARTTLS
+      - caddy-data:/caddy-data:ro
+    depends_on:
+      - api
+      - amavis
+      - opendkim
+      - caddy
+    networks:
+      - mxnet
+    restart: unless-stopped
+
+  amavis:
+    <<: *app-dns
+    build:
+      context: .
+      dockerfile: infra/amavis/Dockerfile
+    container_name: mx-amavis
+    environment:
+      - MAIL_DOMAIN=${MAIL_DOMAIN}
+      - POSTFIX_HOSTNAME=${POSTFIX_HOSTNAME}
+    volumes:
+      - mail-data:/data
+    depends_on:
+      clamav:
+        condition: service_healthy
+    networks:
+      - mxnet
+    restart: unless-stopped
+
+  clamav:
+    <<: *app-dns
+    image: clamav/clamav:stable
+    container_name: mx-clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - mxnet
+    restart: unless-stopped
+
+  opendkim:
+    <<: *app-dns
+    build:
+      context: .
+      dockerfile: infra/opendkim/Dockerfile
+    container_name: mx-opendkim
+    environment:
+      - MAIL_DOMAIN=${MAIL_DOMAIN}
+      - DKIM_SELECTOR=${DKIM_SELECTOR}
+    volumes:
+      - dkim-keys:/etc/opendkim/keys
+      - mail-data:/data
+    networks:
+      - mxnet
+    restart: unless-stopped
+
+volumes:
+  mail-data:
+  postfix-spool:
+  dkim-keys:
+  caddy-data:
+  caddy-config:
+
+networks:
+  mxnet:
+    driver: bridge

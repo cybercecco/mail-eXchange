@@ -1,0 +1,61 @@
+compatibility_level = 3.6
+
+myhostname = mx.local
+myorigin = $myhostname
+mydestination =
+
+smtpd_banner = $myhostname ESMTP
+biff = no
+append_dot_mydomain = no
+readme_directory = no
+
+smtpd_tls_security_level = may
+smtpd_tls_auth_only = yes
+smtpd_tls_loglevel = 1
+
+smtpd_helo_required = yes
+disable_vrfy_command = yes
+strict_rfc821_envelopes = yes
+
+inet_interfaces = all
+inet_protocols = all
+
+mynetworks = 127.0.0.0/8 [::1]/128
+
+virtual_mailbox_domains = hash:/etc/postfix/generated/virtual_alias_domains
+virtual_mailbox_maps = hash:/etc/postfix/generated/virtual_mailbox_maps, regexp:/etc/postfix/generated/virtual_mailbox_catchall
+virtual_alias_maps = hash:/etc/postfix/generated/virtual_alias_maps
+transport_maps = hash:/etc/postfix/generated/transport_maps
+# Relay-only: per-recipient routing lives in transport_maps; avoid virtual(8) crash
+# when a valid domain has no transport entry (e.g. Amavis postmaster notices).
+virtual_transport = error:5.1.1 Recipient delivery is not configured
+
+# Outbound relay (non-local recipients): permit mynetworks (internal), SASL auth,
+# or client IP in relay_source_ips for envelope sender @domain (relay_sender_access).
+# Inbound MX to local virtual domains is not subject to smtpd_relay_restrictions.
+smtpd_relay_restrictions =
+  permit_mynetworks,
+  permit_sasl_authenticated,
+  check_sender_access hash:/etc/postfix/generated/relay_sender_access,
+  reject
+
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_type = cyrus
+smtpd_sasl_path = smtpd
+smtpd_sasl_security_options = noanonymous
+broken_sasl_auth_clients = yes
+
+smtpd_recipient_restrictions =
+  reject_unauth_destination,
+  reject_non_fqdn_recipient,
+  reject_unknown_recipient_domain
+
+content_filter = smtp-amavis:[amavis]:10024
+
+smtpd_milters = inet:opendkim:8891
+non_smtpd_milters = $smtpd_milters
+milter_default_action = accept
+milter_protocol = 6
+
+maillog_file = /dev/stdout
+maillog_file_prefixes = /var, /dev/stdout, /data/logs

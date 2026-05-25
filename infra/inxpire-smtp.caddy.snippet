@@ -1,0 +1,8 @@
+# mail-exchange: smtp.inxpire.support (HTTPS pubblico su porta 443 via inxpire-web)
+smtp.inxpire.support {
+	tls {
+		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+		resolvers 1.1.1.1 1.0.0.1 8.8.8.8
+	}
+	reverse_proxy mx-frontend:80
+}

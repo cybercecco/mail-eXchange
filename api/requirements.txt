@@ -1,0 +1,9 @@
+fastapi
+python-multipart
+uvicorn[standard]
+pydantic
+dnspython
+pyjwt
+bcrypt
+pyotp
+qrcode[pil]

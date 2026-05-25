@@ -1,0 +1,7 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$CADDY_DOMAIN} {
+	reverse_proxy mx-frontend:80
+}

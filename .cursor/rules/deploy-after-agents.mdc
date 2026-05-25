@@ -1,0 +1,22 @@
+---
+description: Deploy in produzione dopo il completamento di tutti gli agent/task
+alwaysApply: true
+---
+
+# Deploy produzione dopo i task
+
+Quando una richiesta è stata completata da uno o più agent (subagent) o da un ciclo di lavoro multi-step:
+
+1. Verifica che non ci siano agent ancora in esecuzione o task aperti irrisolti.
+2. Se ci sono modifiche al codice o alla configurazione del progetto, esegui il deploy in produzione dalla root del repo:
+
+   ```bash
+   ./deploy.sh
+   ```
+
+   Host predefinito: `root@172.22.11.125`, directory remota: `/opt/mail-exchange`. Richiede `.env.production` in locale.
+
+3. Riporta esito del deploy (successo o errore SSH/build) all'utente.
+4. Non fare deploy se l'utente ha chiesto esplicitamente di non deployare, o se non ci sono cambiamenti da pubblicare.
+
+Non committare su git salvo richiesta esplicita; il deploy usa il working tree corrente.
