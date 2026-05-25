@@ -40,8 +40,6 @@ class SystemSettingsUpdate(BaseModel):
     public_url: str = Field(min_length=1, max_length=253)
     acme_email: str = Field(min_length=3, max_length=254)
     docker_dns_servers: str = Field(default="")
-    cloudflare_api_token: str | None = None
-    clear_cloudflare_token: bool = False
 
 
 def normalize_public_hostname(value: str) -> str:
@@ -91,18 +89,63 @@ def _default_settings() -> dict:
         "public_url": DEFAULT_PUBLIC_URL,
         "acme_email": DEFAULT_ACME_EMAIL,
         "docker_dns": list(DEFAULT_DOCKER_DNS),
-        "cloudflare_api_token": "",
     }
 
 
 def settings_for_api(settings: dict | None = None) -> dict:
-    """Return settings safe for API/UI (secrets redacted)."""
+    """Return settings safe for API/UI."""
     data = dict(settings or get_settings())
-    token = (data.pop("cloudflare_api_token", "") or "").strip()
-    data["cloudflare_token_configured"] = bool(token)
+    data.pop("cloudflare_api_token", None)
     data["caddy_http_port"] = DEFAULT_CADDY_HTTP_PORT
     data["caddy_https_port"] = DEFAULT_CADDY_HTTPS_PORT
     return data
+
+
+def bootstrap_settings_from_env() -> None:
+    """Allinea URL pubblico e email ACME dal .env (bootstrap nodo)."""
+    env_url = DEFAULT_PUBLIC_URL
+    env_email = DEFAULT_ACME_EMAIL.strip()
+    if not env_url:
+        return
+    existing = get_settings()
+    updates: dict = {}
+    if (existing.get("public_url") or "").strip() != env_url:
+        updates["public_url"] = env_url
+    if env_email and (existing.get("acme_email") or "").strip() != env_email:
+        updates["acme_email"] = env_email
+    if not updates:
+        return
+    merged = {**existing, **updates}
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO system_settings (id, json_payload) VALUES (1, ?)
+            ON CONFLICT(id) DO UPDATE SET json_payload = excluded.json_payload
+            """,
+            (json.dumps(merged),),
+        )
+        conn.commit()
+
+
+def purge_legacy_cloudflare_token_from_db() -> None:
+    """Rimuove cloudflare_api_token legacy dal JSON impostazioni (ora solo in .env)."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT json_payload FROM system_settings WHERE id = 1"
+        ).fetchone()
+        if not row:
+            return
+        data = json.loads(row["json_payload"])
+        if "cloudflare_api_token" not in data:
+            return
+        data.pop("cloudflare_api_token")
+        conn.execute(
+            """
+            UPDATE system_settings SET json_payload = ? WHERE id = 1
+            """,
+            (json.dumps(data),),
+        )
+        conn.commit()
 
 
 def get_settings() -> dict:
@@ -115,6 +158,7 @@ def get_settings() -> dict:
     data = json.loads(row["json_payload"])
     merged = _default_settings()
     merged.update({k: v for k, v in data.items() if v is not None})
+    merged.pop("cloudflare_api_token", None)
     merged["docker_dns"] = normalize_docker_dns(merged.get("docker_dns"))
     return merged
 
@@ -157,21 +201,11 @@ def write_docker_dns_compose_override() -> None:
     (GENERATED_DIR / "docker-dns.env").write_text("\n".join(env_lines), encoding="utf-8")
 
 
-def _resolve_cloudflare_token(payload: SystemSettingsUpdate, existing: dict) -> str:
-    if payload.clear_cloudflare_token:
-        return ""
-    if payload.cloudflare_api_token is not None:
-        return payload.cloudflare_api_token.strip()
-    return (existing.get("cloudflare_api_token") or "").strip()
-
-
 def update_settings(payload: SystemSettingsUpdate) -> dict:
-    existing = get_settings()
     normalized = {
         "public_url": normalize_public_hostname(payload.public_url),
         "acme_email": payload.acme_email.strip(),
         "docker_dns": normalize_docker_dns(payload.docker_dns_servers),
-        "cloudflare_api_token": _resolve_cloudflare_token(payload, existing),
     }
     with db() as conn:
         conn.execute(

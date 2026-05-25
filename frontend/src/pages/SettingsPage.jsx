@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import DnsRecordCard from "../components/DnsRecordCard";
-import { CheckboxField, FormField } from "../components/FormField";
+import { FormField } from "../components/FormField";
 import StatusBadge from "../components/StatusBadge";
 
 export default function SettingsPage({ onError, isAdmin }) {
   const [form, setForm] = useState({
     public_url: "",
     acme_email: "",
-    docker_dns_servers: "",
-    cloudflare_api_token: ""
+    docker_dns_servers: ""
   });
-  const [cloudflareTokenConfigured, setCloudflareTokenConfigured] = useState(false);
-  const [clearCloudflareToken, setClearCloudflareToken] = useState(false);
   const [caddyPorts, setCaddyPorts] = useState({ http: 60080, https: 60443 });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -65,11 +62,8 @@ export default function SettingsPage({ onError, isAdmin }) {
             acme_email: data.acme_email || "",
             docker_dns_servers:
               data.docker_dns_servers ||
-              (Array.isArray(data.docker_dns) ? data.docker_dns.join("\n") : ""),
-            cloudflare_api_token: ""
+              (Array.isArray(data.docker_dns) ? data.docker_dns.join("\n") : "")
           });
-          setCloudflareTokenConfigured(Boolean(data.cloudflare_token_configured));
-          setClearCloudflareToken(false);
           setCaddyPorts({
             http: data.caddy_http_port ?? 60080,
             https: data.caddy_https_port ?? 60443
@@ -106,22 +100,13 @@ export default function SettingsPage({ onError, isAdmin }) {
       const body = {
         public_url: form.public_url.trim(),
         acme_email: form.acme_email.trim(),
-        docker_dns_servers: form.docker_dns_servers.trim(),
-        clear_cloudflare_token: clearCloudflareToken
+        docker_dns_servers: form.docker_dns_servers.trim()
       };
-      if (form.cloudflare_api_token.trim()) {
-        body.cloudflare_api_token = form.cloudflare_api_token.trim();
-      }
       const result = await api("/settings", {
         method: "PUT",
         body: JSON.stringify(body)
       });
       setSaveResult(result);
-      if (result.settings) {
-        setCloudflareTokenConfigured(Boolean(result.settings.cloudflare_token_configured));
-        setForm((prev) => ({ ...prev, cloudflare_api_token: "" }));
-        setClearCloudflareToken(false);
-      }
     } catch (err) {
       onError?.(err.message);
     } finally {
@@ -178,6 +163,7 @@ export default function SettingsPage({ onError, isAdmin }) {
           URL pubblico per HTTPS/Let&apos;s Encrypt, controlli DNS e test di invio attraverso Postfix.
           Caddy espone HTTP sulla porta {caddyPorts.http} e HTTPS sulla {caddyPorts.https}; se serve
           l&apos;accesso standard (80/443), configura NAT o firewall esterno (es. 443→{caddyPorts.https}).
+          Il token Cloudflare per certificati Let&apos;s Encrypt (DNS-01) va in <code>CLOUDFLARE_API_TOKEN</code> nel file <code>.env</code>.
         </p>
       </header>
 
@@ -216,34 +202,6 @@ export default function SettingsPage({ onError, isAdmin }) {
                 disabled={saving}
               />
             </FormField>
-            <FormField
-              label="Token Cloudflare (DNS ACME)"
-              htmlFor="settings-cloudflare-token"
-              hint={
-                cloudflareTokenConfigured
-                  ? "Token configurato. Lascia vuoto per mantenerlo, oppure inserisci un nuovo valore per sostituirlo. Con token attivo Caddy usa la sfida DNS-01 via Cloudflare per Let's Encrypt."
-                  : "Opzionale. Token API Cloudflare con permesso DNS Edit sulla zona del dominio. Se assente, Caddy tenta HTTP-01 sulla porta HTTP dello stack (richiede reachability da Internet o NAT 80→60080)."
-              }
-            >
-              <input
-                id="settings-cloudflare-token"
-                type="password"
-                autoComplete="new-password"
-                placeholder={cloudflareTokenConfigured ? "•••••••• (invariato se vuoto)" : "Token API Cloudflare"}
-                value={form.cloudflare_api_token}
-                onChange={(e) => setForm({ ...form, cloudflare_api_token: e.target.value })}
-                disabled={saving || clearCloudflareToken}
-              />
-            </FormField>
-            {cloudflareTokenConfigured && (
-              <CheckboxField
-                label="Rimuovi token Cloudflare"
-                hint="Al salvataggio Caddy userà HTTP-01 (o certificato interno se la sfida fallisce)."
-                checked={clearCloudflareToken}
-                onChange={setClearCloudflareToken}
-                disabled={saving}
-              />
-            )}
             <FormField
               label="DNS per container Docker"
               htmlFor="settings-docker-dns"

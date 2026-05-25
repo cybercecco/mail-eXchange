@@ -7,15 +7,15 @@ x-app-dns: &app-dns
 services:
   api:
     <<: *app-dns
-    build:
-      context: .
-      dockerfile: api/Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-api:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-api
     environment:
       - API_PORT=8000
       - DATA_DIR=/data
       - MAIL_DOMAIN=${MAIL_DOMAIN}
       - POSTFIX_HOSTNAME=${POSTFIX_HOSTNAME}
+      - CADDY_DOMAIN=${CADDY_DOMAIN:-}
+      - ACME_EMAIL=${ACME_EMAIL:-admin@example.com}
       - POSTFIX_SMTP_TLS=${POSTFIX_SMTP_TLS:-false}
       - PUBLIC_HOSTNAME=${PUBLIC_HOSTNAME:-}
       - PUBLIC_IPV4=${PUBLIC_IPV4:-}
@@ -30,6 +30,7 @@ services:
       - SYNC_HTTPS_PORT=${SYNC_HTTPS_PORT:-60443}
       - COMPOSE_PROJECT_DIR=/compose
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       - mail-data:/data
       # Riavvio servizi da pannello admin: socket Docker (ro) + CLI nel container api
@@ -42,9 +43,7 @@ services:
 
   frontend:
     <<: *app-dns
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-frontend:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-frontend
     depends_on:
       - api
@@ -54,10 +53,10 @@ services:
 
   caddy:
     <<: *app-dns
-    build:
-      context: .
-      dockerfile: infra/caddy/Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-caddy:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-caddy
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     command: ["run", "--config", "/mail-exchange-data/generated/Caddyfile", "--adapter", "caddyfile"]
     ports:
       - "${CADDY_HTTP_PORT:-60080}:80"
@@ -74,9 +73,7 @@ services:
 
   postfix:
     <<: *app-dns
-    build:
-      context: .
-      dockerfile: infra/postfix/Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-postfix:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-postfix
     environment:
       - MAIL_DOMAIN=${MAIL_DOMAIN}
@@ -101,9 +98,7 @@ services:
 
   amavis:
     <<: *app-dns
-    build:
-      context: .
-      dockerfile: infra/amavis/Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-amavis:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-amavis
     environment:
       - MAIL_DOMAIN=${MAIL_DOMAIN}
@@ -133,9 +128,7 @@ services:
 
   opendkim:
     <<: *app-dns
-    build:
-      context: .
-      dockerfile: infra/opendkim/Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-opendkim:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-opendkim
     environment:
       - MAIL_DOMAIN=${MAIL_DOMAIN}

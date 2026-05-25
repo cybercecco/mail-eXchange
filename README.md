@@ -56,7 +56,7 @@ La configurazione è persistita in **SQLite** e rigenerata automaticamente in fi
 | **Amavis** | Content filter: integrazione SpamAssassin + ClamAV |
 | **ClamAV** | Antivirus (`clamav/clamav:stable`, immagine upstream) |
 | **OpenDKIM** | Milter per firma DKIM in uscita, chiavi per dominio |
-| **Caddy** | Reverse proxy HTTPS per la UI, certificati Let's Encrypt (HTTP-01 o DNS-01 Cloudflare) |
+| **Caddy** | Reverse proxy HTTPS per la UI; certificato interno o LE DNS-01 Cloudflare |
 | **FastAPI** | API backend, auth JWT, rigenerazione config, operazioni coda |
 | **React** | Frontend SPA (Vite), tema chiaro/scuro |
 
@@ -220,8 +220,9 @@ Pagina **Configurazione → Sistema & test mail** (solo admin):
 |-------|---------|
 | **URL pubblico** | Hostname Caddy/TLS (es. `smtp.example.com`) |
 | **Email ACME** | Contatto Let's Encrypt |
-| **Token Cloudflare** | DNS-01 ACME (permesso DNS Edit); salvato cifrato nel DB, mai loggato |
 | **DNS container** | Resolver Docker per tutti i servizi stack |
+
+Il **token Cloudflare** per la sfida DNS-01 ACME va in `CLOUDFLARE_API_TOKEN` nel file `.env` (non in UI né DB). Dopo modifica: `docker compose up -d` (o `./deploy.sh`) e riavvio Caddy.
 
 **Apply on save:** al salvataggio l'API rigenera `Caddyfile`, `docker-dns.override.yml`, ricrea i container con nuovi DNS e riavvia Caddy.
 
@@ -309,7 +310,9 @@ Policy **globali** per tutto lo stack:
 - Whitelist / blacklist mittenti
 - Override punteggi regole
 
-Rigenerazione `spamassassin.local.cf` e override Amavis.
+Rigenerazione `spamassassin.local.cf` e override Amavis (`amavis-spam-overrides.conf` con `@score_sender_maps` per la whitelist). Amavis ricarica la configurazione automaticamente quando i file generati cambiano.
+
+Messaggi spam/virus bloccati fino al livello *kill* vengono **messi in quarantena** (non eliminati subito): Amavis salva in `/data/quarantine/incoming/`, l'API indicizza in `/data/quarantine/{id}/` con TTL **36 ore**, poi cancellazione automatica. Dal pannello **Sicurezza → Quarantena spam** (solo admin) è possibile cercare, rilasciare verso il destinatario originale o eliminare manualmente.
 
 ---
 
@@ -346,21 +349,32 @@ docker login   # non committare credenziali
 
 ## Deploy e produzione / Deployment
 
+### Build e push (macchina di sviluppo)
+
+Dopo modifiche al codice, buildare e pubblicare le immagini su Docker Hub:
+
+```bash
+docker login
+./scripts/build-and-push.sh
+```
+
 ### Deploy da Docker Hub (pull-only, senza build)
+
+Il server di produzione **non** contiene sorgenti: solo `docker-compose.yml`, `.env` e opzionalmente `docker-dns.override.yml`. I volumi Docker (`mail-data`, ecc.) restano intatti.
 
 ```bash
 cp .env.example .env   # oppure .env.production sul server
 # Impostare DOCKERHUB_NAMESPACE=cybercecco e MAIL_EXCHANGE_IMAGE_TAG=latest
 
-docker compose -f docker-compose.yml -f docker-compose.hub.yml pull
-docker compose -f docker-compose.yml -f docker-compose.hub.yml up -d --no-build
+docker compose pull
+docker compose up -d
 ```
 
 Porte predefinite:
 
 | Porta host | Servizio |
 |------------|----------|
-| **60080** | Caddy HTTP (ACME HTTP-01) |
+| **60080** | Caddy HTTP (UI; senza `CLOUDFLARE_API_TOKEN` non reindirizza a HTTPS) |
 | **60443** | Caddy HTTPS (UI) |
 | **25** / **587** | Postfix SMTP / submission (`SMTP_PUBLISHED_PORT`, `SUBMISSION_PUBLISHED_PORT`) |
 
@@ -369,10 +383,25 @@ Sovrascrivibili con `CADDY_HTTP_PORT`, `CADDY_HTTPS_PORT` in `.env`.
 ### Deploy remoto SSH
 
 ```bash
+# Nodo primario (default se ometti argomenti)
 ./deploy.sh root@172.22.11.125 /opt/mail-exchange
+
+# Secondo nodo / cluster (stessa directory sotto /opt/)
+./deploy.sh root@192.168.1.69 /opt/mail-exchange .env.production.secondary
 ```
 
-Richiede `.env.production` locale. Copia sorgenti (esclusi segreti), esegue `docker compose pull && up --build` sul remoto, applica override DNS generati.
+Richiede un file env locale (`.env.production` per il nodo A, oppure terzo argomento / `DEPLOY_ENV_FILE` per il nodo B). Copia solo `docker-compose.yml` e `.env` sul server, rimuove sorgenti già presenti (`api/`, `frontend/`, `infra/`, ecc.), esegue `docker compose pull && docker compose up -d` (nessun build), applica override DNS generati dall'API.
+
+#### Bootstrap nodo B (TLS e Cloudflare)
+
+1. Creare `.env.production.secondary` da `.env.production.secondary.example` con `POSTFIX_HOSTNAME`, `PUBLIC_HOSTNAME` e `CADDY_DOMAIN` = FQDN del nodo (es. `smtp.vetrobalsamo.com`), stesso `SYNC_SHARED_SECRET` del nodo A se in cluster.
+2. Deploy: `./deploy.sh root@192.168.1.69 /opt/mail-exchange .env.production.secondary`
+3. Aprire **`http://<fqdn-o-ip>:60080`** (es. `http://192.168.1.69:60080`) — la UI è raggiungibile senza certificato valido.
+4. Login admin → **Configurazione** → verificare **URL pubblico** = FQDN del nodo.
+5. Impostare **`CLOUDFLARE_API_TOKEN`** nel `.env` del server (permesso DNS Edit sulla zona Cloudflare), poi `docker compose up -d` (o redeploy). Caddy rigenera il `Caddyfile` all'avvio API e ottiene Let's Encrypt via DNS-01.
+6. Fino al passo 5, HTTPS su `:60443` usa un certificato interno (avviso nel browser, accettabile per bootstrap).
+
+**Rinnovo certificati:** Caddy conserva i certificati nel volume `caddy-data` (`/data` nel container) e rinnova automaticamente i certificati Let's Encrypt circa **30 giorni prima della scadenza** (comportamento predefinito di Caddy).
 
 ### DNS minimo (per dominio)
 
@@ -465,6 +494,10 @@ Tutte le route di gestione richiedono JWT, tranne `/api/health`, `/api/auth/logi
 | Metodo | Endpoint | Descrizione |
 |--------|----------|-------------|
 | GET/PUT | `/api/spamassassin` | Policy antispam |
+| GET | `/api/quarantine?from=&to=&q=` | Elenco quarantena (admin) |
+| GET | `/api/quarantine/{id}` | Dettaglio messaggio quarantena |
+| POST | `/api/quarantine/{id}/release` | Rilascio verso destinatario |
+| DELETE | `/api/quarantine/{id}` | Eliminazione manuale |
 | GET | `/api/dns/check` | Verifica DNS tutti i domini |
 | GET | `/api/dns/check?domain=` | Singolo dominio |
 | GET/POST/PUT/DELETE | `/api/users` | Gestione utenti (admin) |
@@ -485,6 +518,7 @@ Tutte le route di gestione richiedono JWT, tranne `/api/health`, `/api/auth/logi
 | `CADDY_HTTP_PORT` | `60080` | Porta host HTTP Caddy |
 | `CADDY_HTTPS_PORT` | `60443` | Porta host HTTPS Caddy |
 | `ACME_EMAIL` | — | Email Let's Encrypt |
+| `CLOUDFLARE_API_TOKEN` | — | Token API Cloudflare (DNS Edit) per certificati LE via Caddy DNS-01; solo in `.env`, mai in UI/DB |
 | `MYNETWORKS` | reti Docker | Reti trusted Postfix |
 | `DKIM_SELECTOR` | `mail` | Selector DKIM default |
 | `SMTP_PUBLISHED_PORT` | `2525` | Porta host SMTP (→ 25 container) |
@@ -538,14 +572,16 @@ cd mail-eXchange
 cp .env.example .env
 # Modificare JWT_SECRET, POSTFIX_HOSTNAME, ADMIN_* ...
 
-docker compose up -d --build
+docker compose pull
+docker compose up -d
+# Sviluppo con build locale: ./scripts/build-and-push.sh (PUSH=0)
 ```
 
 1. Apri `http://localhost:60080` o `https://<host>:60443`.
 2. Accedi con credenziali admin bootstrap.
 3. **Domini** → aggiungi dominio → tab Destinazioni → tab Caselle.
 4. (Consigliato) **Il mio account** → MFA + cambio password.
-5. **Configurazione** → URL pubblico e token Cloudflare se serve TLS DNS-01.
+5. **Configurazione** → URL pubblico; per TLS LE impostare `CLOUDFLARE_API_TOKEN` in `.env`.
 
 ---
 

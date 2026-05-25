@@ -59,9 +59,23 @@ from app.domains import (
     update_domain,
 )
 from app.mail_test import TestMailRequest, send_test_mail
+from app.quarantine import (
+    delete_quarantine,
+    get_quarantine,
+    list_quarantine,
+    quarantine_worker_once,
+    release_quarantine,
+)
 from app.service_restart import restart_daemon
 from app.service_status import collect_daemon_status
-from app.system_settings import SystemSettingsUpdate, get_settings, settings_for_api, update_settings
+from app.system_settings import (
+    SystemSettingsUpdate,
+    bootstrap_settings_from_env,
+    get_settings,
+    purge_legacy_cloudflare_token_from_db,
+    settings_for_api,
+    update_settings,
+)
 from app.mailbox_import import import_mailboxes_csv
 from app.regenerate import regenerate_files
 from app.spamassassin import SpamSettings, normalize_settings
@@ -113,13 +127,26 @@ def _error_digest_worker() -> None:
         time.sleep(900)
 
 
+def _quarantine_worker() -> None:
+    time.sleep(30)
+    while True:
+        try:
+            quarantine_worker_once()
+        except Exception:
+            pass
+        time.sleep(60)
+
+
 @app.on_event("startup")
 def startup_event() -> None:
     init_db()
     bootstrap_admin_if_needed()
     ensure_jwt_configured_for_protected_routes()
+    bootstrap_settings_from_env()
+    purge_legacy_cloudflare_token_from_db()
     regenerate_files()
     threading.Thread(target=_error_digest_worker, daemon=True).start()
+    threading.Thread(target=_quarantine_worker, daemon=True).start()
 
 
 @app.get("/api/health")
@@ -558,3 +585,29 @@ def set_spamassassin(payload: SpamSettings, _user: CurrentUser) -> dict:
         conn.commit()
     regenerate_files()
     return {"status": "updated", "settings": normalized}
+
+
+@app.get("/api/quarantine")
+def api_quarantine_list(
+    _admin: AdminUser,
+    from_addr: str = Query(default="", alias="from"),
+    to: str = Query(default=""),
+    q: str = Query(default=""),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> dict:
+    return list_quarantine(from_filter=from_addr, to_filter=to, query=q, limit=limit)
+
+
+@app.get("/api/quarantine/{entry_id}")
+def api_quarantine_detail(entry_id: str, _admin: AdminUser) -> dict:
+    return get_quarantine(entry_id)
+
+
+@app.post("/api/quarantine/{entry_id}/release")
+def api_quarantine_release(entry_id: str, _admin: AdminUser) -> dict:
+    return release_quarantine(entry_id)
+
+
+@app.delete("/api/quarantine/{entry_id}")
+def api_quarantine_delete(entry_id: str, _admin: AdminUser) -> dict:
+    return delete_quarantine(entry_id)
