@@ -66,7 +66,7 @@ export default function AddDomainModal({
           <FormField
             label="Server Cluster (FQDN)"
             htmlFor="domain-sibling"
-            hint="Opzionale: replica automatica delle caselle di posta verso un altro nodo del cluster Mail Exchange (HTTPS porta 60443, stesso segreto SYNC)."
+            hint="Opzionale: replica automatica verso un altro nodo (configura anche la chiave precondivisa nel tab Cluster)."
             hintAfter
           >
             <input

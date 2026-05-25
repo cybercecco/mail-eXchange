@@ -8,8 +8,8 @@ const NAV = [
     id: "security",
     label: "Sicurezza",
     items: [
-      { id: "dns", label: "DNS (SPF/DKIM/DMARC)" },
-      { id: "spam", label: "SpamAssassin" }
+      { id: "spam", label: "SpamAssassin" },
+      { id: "quarantine", label: "Quarantena spam" }
     ]
   },
   {

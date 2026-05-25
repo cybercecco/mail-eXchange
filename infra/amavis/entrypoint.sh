@@ -4,6 +4,9 @@ set -euo pipefail
 mkdir -p /etc/spamassassin
 mkdir -p /data/generated
 mkdir -p /data/logs
+mkdir -p /data/quarantine/incoming/spam
+mkdir -p /data/quarantine/incoming/virus
+mkdir -p /data/quarantine/incoming/bad-header
 touch /data/logs/amavis.log
 chown amavis:amavis /data/logs/amavis.log 2>/dev/null || true
 chmod 664 /data/logs/amavis.log 2>/dev/null || true
@@ -108,6 +111,32 @@ watch_domains() {
 }
 
 watch_domains &
+
+watch_spam_config() {
+  local old_sum=""
+  local initialized=0
+  while true; do
+    local files=(
+      /data/generated/spamassassin.local.cf
+      /data/generated/amavis-spam-overrides.conf
+    )
+    local current_sum=""
+    current_sum="$(sha256sum "${files[@]}" 2>/dev/null | sha256sum | awk '{print $1}')"
+    if [[ "${initialized}" -eq 1 && "${current_sum}" != "${old_sum}" ]]; then
+      echo "Spam/Amavis config changed — reloading amavisd"
+      if command -v amavisd-new >/dev/null 2>&1; then
+        amavisd-new reload 2>/dev/null || true
+      elif command -v amavisd >/dev/null 2>&1; then
+        amavisd reload 2>/dev/null || true
+      fi
+    fi
+    old_sum="${current_sum}"
+    initialized=1
+    sleep 15
+  done
+}
+
+watch_spam_config &
 
 if command -v amavisd-new >/dev/null 2>&1; then
   exec amavisd-new foreground

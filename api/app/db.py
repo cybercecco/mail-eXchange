@@ -104,6 +104,10 @@ def init_db() -> None:
             )
         if "relay_source_ips" not in domain_cols:
             conn.execute("ALTER TABLE domains ADD COLUMN relay_source_ips TEXT")
+        if "dns_mx_hints" not in domain_cols:
+            conn.execute("ALTER TABLE domains ADD COLUMN dns_mx_hints TEXT")
+        if "sync_secret" not in domain_cols:
+            conn.execute("ALTER TABLE domains ADD COLUMN sync_secret TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS mailboxes (

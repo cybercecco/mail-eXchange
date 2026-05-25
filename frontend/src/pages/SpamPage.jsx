@@ -286,6 +286,7 @@ export default function SpamPage({ onError }) {
               <p className="panel-hint">
                 Indirizzi <code>From:</code> da non classificare mai come spam, o sempre come spam.
                 Supporta wildcard: <code>*@dominio.it</code>, <code>*.dominio.it</code>.
+                La whitelist viene applicata in SpamAssassin e in Amavis (`@score_sender_maps`, punteggio -100).
               </p>
               <FormField label="Mittenti da non classificare mai come spam (whitelist_from)">
                 <textarea

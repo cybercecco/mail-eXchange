@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import AddDomainModal from "../components/AddDomainModal";
+import DomainDnsSettingsPanel from "../components/DomainDnsSettingsPanel";
 import DomainMailboxesPanel from "../components/DomainMailboxesPanel";
 import { CheckboxField, FormField } from "../components/FormField";
 
@@ -16,7 +17,8 @@ const SETTINGS_TABS = [
   { id: "destinazioni", label: "Destinazioni" },
   { id: "caselle", label: "Caselle" },
   { id: "cluster", label: "Cluster" },
-  { id: "relay", label: "Relay" }
+  { id: "relay", label: "Relay" },
+  { id: "dns", label: "DNS" }
 ];
 
 export default function DomainsPage({
@@ -51,6 +53,7 @@ export default function DomainsPage({
   const [editingDestKey, setEditingDestKey] = useState(null);
   const [destEditDrafts, setDestEditDrafts] = useState({});
   const [siblingDrafts, setSiblingDrafts] = useState({});
+  const [syncSecretDrafts, setSyncSecretDrafts] = useState({});
   const [siblingBusy, setSiblingBusy] = useState(null);
   const [relayBusy, setRelayBusy] = useState(null);
   const [relaySourceDrafts, setRelaySourceDrafts] = useState({});
@@ -189,19 +192,39 @@ export default function DomainsPage({
     setSiblingDrafts((prev) => ({ ...prev, [domainId]: value }));
   }
 
-  async function saveSiblingFqdn(domainId) {
+  function syncSecretDraftFor(item) {
+    if (syncSecretDrafts[item.id] !== undefined) {
+      return syncSecretDrafts[item.id];
+    }
+    return "";
+  }
+
+  function setSyncSecretDraft(domainId, value) {
+    setSyncSecretDrafts((prev) => ({ ...prev, [domainId]: value }));
+  }
+
+  async function saveClusterConfig(domainId) {
     const item = domains.find((d) => d.id === domainId);
     if (!item) return;
     setSiblingBusy(domainId);
     try {
+      const body = {
+        sibling_fqdn: siblingDraftFor(item).trim() || null
+      };
+      if (syncSecretDrafts[item.id] !== undefined) {
+        body.sync_secret = syncSecretDraftFor(item).trim() || null;
+      }
       const result = await api(`/domains/${domainId}`, {
         method: "PUT",
-        body: JSON.stringify({
-          sibling_fqdn: siblingDraftFor(item).trim() || null
-        })
+        body: JSON.stringify(body)
       });
       onSyncWarning?.(result, { attemptSync: true });
       setSiblingDrafts((prev) => {
+        const next = { ...prev };
+        delete next[domainId];
+        return next;
+      });
+      setSyncSecretDrafts((prev) => {
         const next = { ...prev };
         delete next[domainId];
         return next;
@@ -394,9 +417,12 @@ export default function DomainsPage({
               const busy = destBusy === item.id;
               const siblingBusyItem = siblingBusy === item.id;
               const siblingDraft = siblingDraftFor(item);
+              const syncSecretDraft = syncSecretDraftFor(item);
               const siblingDirty =
                 siblingDrafts[item.id] !== undefined &&
                 siblingDraft.trim() !== (item.sibling_fqdn || "");
+              const syncSecretDirty = syncSecretDrafts[item.id] !== undefined;
+              const clusterDirty = siblingDirty || syncSecretDirty;
               const relayAllInbound = !!item.relay_all_inbound;
               const relayBusyItem = relayBusy === item.id;
               const relaySourceDraft = relaySourceDraftFor(item);
@@ -475,15 +501,17 @@ export default function DomainsPage({
                     <div className="domain-settings-panel domain-sibling">
                       <h4 className="domain-destinations__title">Server Cluster</h4>
                       <p className="panel-hint">
-                        FQDN dell&apos;altro nodo del cluster che riceve l&apos;elenco caselle di questo dominio al salvataggio
-                        del Server Cluster e ad ogni creazione, modifica o eliminazione di casella. Impostazioni dominio e
-                        destinazioni restano locali. Lasciare vuoto per disabilitare la replica.
+                        FQDN dell&apos;altro nodo del cluster che riceve il bundle di sincronizzazione
+                        (caselle, selector/chiavi DKIM, suggerimenti MX) al salvataggio, ad ogni modifica
+                        caselle e quando cambiano selector o chiavi DKIM. Impostazioni locali come
+                        destinazioni e relay restano sul nodo. Lasciare vuoto per disabilitare la replica.
+                        La chiave precondivisa deve essere identica su entrambi i nodi per questo dominio.
                       </p>
                       <form
                         className="form-grid form-grid--inline form-grid--inline-dest"
                         onSubmit={(e) => {
                           e.preventDefault();
-                          saveSiblingFqdn(item.id);
+                          saveClusterConfig(item.id);
                         }}
                       >
                         <FormField label="FQDN Server Cluster" htmlFor={`sibling-${item.id}`}>
@@ -495,13 +523,34 @@ export default function DomainsPage({
                             disabled={siblingBusyItem}
                           />
                         </FormField>
+                        <FormField
+                          label="Chiave precondivisa sync"
+                          htmlFor={`sync-secret-${item.id}`}
+                          hint={
+                            item.sync_secret_configured && syncSecretDrafts[item.id] === undefined
+                              ? "Chiave già configurata — lascia vuoto per mantenerla, o inserisci un nuovo valore per sostituirla"
+                              : "Stesso valore su entrambi i nodi per questo dominio"
+                          }
+                        >
+                          <input
+                            id={`sync-secret-${item.id}`}
+                            type="password"
+                            autoComplete="new-password"
+                            placeholder={
+                              item.sync_secret_configured ? "•••••••• (configurata)" : "Segreto condiviso"
+                            }
+                            value={syncSecretDraft}
+                            onChange={(e) => setSyncSecretDraft(item.id, e.target.value)}
+                            disabled={siblingBusyItem}
+                          />
+                        </FormField>
                         <div className="form-actions">
                           <button
                             type="submit"
                             className="btn-secondary btn-sm"
-                            disabled={siblingBusyItem || !siblingDirty}
+                            disabled={siblingBusyItem || !clusterDirty}
                           >
-                            {siblingBusyItem ? "Salvataggio..." : "Salva Server Cluster"}
+                            {siblingBusyItem ? "Salvataggio..." : "Salva configurazione cluster"}
                           </button>
                         </div>
                       </form>
@@ -687,6 +736,10 @@ export default function DomainsPage({
                       importResult={importResult}
                       importBusy={importBusy}
                     />
+                  )}
+
+                  {settingsTab === "dns" && (
+                    <DomainDnsSettingsPanel domainName={item.name} active={settingsTab === "dns"} />
                   )}
 
                   {settingsTab === "relay" && (

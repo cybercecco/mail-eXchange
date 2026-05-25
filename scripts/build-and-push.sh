@@ -91,8 +91,4 @@ done
 
 echo ""
 echo "Push completato."
-echo "Deploy remoto:"
-echo "  DOCKERHUB_NAMESPACE=${NAMESPACE} MAIL_EXCHANGE_IMAGE_TAG=${TAG} \\"
-echo "    docker compose -f docker-compose.yml -f docker-compose.hub.yml pull"
-echo "  DOCKERHUB_NAMESPACE=${NAMESPACE} MAIL_EXCHANGE_IMAGE_TAG=${TAG} \\"
-echo "    docker compose -f docker-compose.yml -f docker-compose.hub.yml up -d --no-build"
+echo "Deploy remoto: ./deploy.sh"

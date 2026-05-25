@@ -74,8 +74,8 @@ Tutti i servizi custom sono orchestrati con **Docker Compose** sulla rete intern
                     │  Amavis → ClamAV, OpenDKIM          │
                     └──────────────┬──────────────────────┘
                                    │ HTTPS :60443
-                                   │ POST /api/sync/mailboxes
-                                   │ Bearer SYNC_SHARED_SECRET
+                                   │ POST /api/sync/domain-bundle
+                                   │ Bearer sync_secret (per dominio)
                     ┌──────────────▼──────────────────────┐
                     │  Nodo B (mx2.example.com)           │
                     │  (stessa stack, DB indipendente)    │
@@ -83,14 +83,15 @@ Tutti i servizi custom sono orchestrati con **Docker Compose** sulla rete intern
 ```
 
 - Ogni nodo ha **database SQLite proprio** e configurazione locale (dominio, destinazioni, impostazioni).
-- La sync cluster replica **solo le caselle** di un dominio verso il peer configurato in `sibling_fqdn`.
-- Il nodo che modifica i dati è **fonte di verità**; il push sovrascrive le caselle sul peer.
-- `sibling_fqdn`, destinazioni e impostazioni di sistema **non** vengono sincronizzate.
+- La sync cluster replica **caselle**, **selector/chiavi DKIM** e **suggerimenti MX** di un dominio verso il peer configurato in `sibling_fqdn`.
+- Il nodo che modifica i dati è **fonte di verità**; il push sovrascrive caselle e allinea DKIM sul peer.
+- `sibling_fqdn`, destinazioni, relay e impostazioni di sistema **non** vengono sincronizzate.
+- I record MX inviati descrivono gli host SMTP del nodo sorgente (`POSTFIX_HOSTNAME`, `PUBLIC_HOSTNAME`); il peer li accumula in `dns_mx_hints` per la verifica DNS.
 - Porta HTTPS predefinita per sync: **60443** (`SYNC_HTTPS_PORT`).
 
 Per produzione multi-nodo tipico:
 
-1. Due (o più) server con stack identica, `.env` con lo stesso `SYNC_SHARED_SECRET`.
+1. Due (o più) server con stack identica; per ogni dominio in cluster, stessa **chiave precondivisa sync** e `sibling_fqdn` configurati nel tab **Cluster** su entrambi i nodi.
 2. Su dominio `example.com` su nodo A: `sibling_fqdn = mx2.example.com`.
 3. Su nodo B: configurazione speculare o lasciare vuoto se la sync è unidirezionale.
 
@@ -139,8 +140,10 @@ Ogni dominio ha **sotto-tab**:
 
 ### Cluster
 
-- Campo **FQDN Server Cluster** (`sibling_fqdn`): peer che riceve push HTTPS delle caselle.
-- Sync automatica dopo: salvataggio cluster, creazione/modifica/eliminazione casella, import CSV.
+- Campo **FQDN Server Cluster** (`sibling_fqdn`): peer che riceve push HTTPS del bundle dominio.
+- Campo **Chiave precondivisa sync** (`sync_secret`): stesso valore su entrambi i nodi per quel dominio (non esposta in lista API; solo `sync_secret_configured: true/false`).
+- Sync automatica dopo: salvataggio cluster, creazione/modifica/eliminazione casella, import CSV, cambio selector DKIM, rigenerazione chiavi DKIM (`POST /api/domains/{id}/dkim/regenerate`).
+- Sul peer: caselle allineate, `dkim_selector` e chiavi OpenDKIM installate (volume condiviso), suggerimenti MX salvati per il sotto-tab DNS.
 - Avviso `sync_warning` in UI se il peer non risponde (salvataggio locale comunque valido).
 
 ### Relay
@@ -181,18 +184,45 @@ Requisiti: dominio abilitato per l'email; destinazione deve esistere nel dominio
 
 ## Sincronizzazione cluster / Cluster sync
 
-| Variabile | Descrizione |
-|-----------|-------------|
-| `SYNC_SHARED_SECRET` | Segreto condiviso tra i nodi (header `Authorization: Bearer`) |
+| Impostazione | Descrizione |
+|--------------|-------------|
+| `sync_secret` (per dominio) | Chiave Bearer condivisa tra i nodi per quel dominio (tab Cluster) |
 | `SYNC_TLS_VERIFY` | Verifica certificato TLS peer (default `true`) |
 | `SYNC_HTTPS_PORT` | Porta HTTPS per push (default `60443`) |
 | `PUBLIC_HOSTNAME` | Evita sync verso se stessi |
 
-**Endpoint ricevente:** `POST /api/sync/mailboxes` (autenticazione Bearer).
+> **Deprecato:** `SYNC_SHARED_SECRET` in `.env` è ancora accettato come fallback con warning in log, ma va sostituito con `sync_secret` per dominio.
 
-**Payload:** `{ "domain_name": "...", "mailboxes": [{ "email", "destination_host", "destination_port", "enabled" }] }`.
+**Endpoint ricevente:** `POST /api/sync/domain-bundle` (autenticazione Bearer). L'endpoint legacy `POST /api/sync/mailboxes` accetta lo stesso payload.
 
-Il ricevente crea il dominio se assente, upsert/delete caselle, rigenera Postfix. Destinazioni e impostazioni dominio restano locali.
+**Payload:**
+
+```json
+{
+  "domain_name": "example.com",
+  "mailboxes": [
+    {
+      "email": "user@example.com",
+      "destination_host": "backend.example.com",
+      "destination_port": 25,
+      "enabled": true
+    }
+  ],
+  "domain_sync": {
+    "dkim_selector": "mail",
+    "dkim_private_key_pem": "-----BEGIN PRIVATE KEY-----...",
+    "dkim_public_key_dns_txt": "v=DKIM1; k=rsa; p=..."
+  },
+  "mx_records": [
+    { "priority": 10, "host": "mx1.example.com" },
+    { "priority": 20, "host": "smtp.example.com" }
+  ]
+}
+```
+
+Il ricevente crea il dominio se assente, upsert/delete caselle, aggiorna `dkim_selector` (senza toccare `sibling_fqdn`), installa le chiavi DKIM nel volume OpenDKIM, unisce `mx_records` in `dns_mx_hints` e rigenera Postfix/OpenDKIM. Destinazioni, relay e impostazioni dominio restano locali.
+
+**MX:** ogni nodo esporta i propri hostname SMTP; il peer non modifica il DNS pubblico ma conserva gli hint per evidenziare in UI i record MX mancanti in un cluster multi-nodo.
 
 ---
 
@@ -394,7 +424,7 @@ Richiede un file env locale (`.env.production` per il nodo A, oppure terzo argom
 
 #### Bootstrap nodo B (TLS e Cloudflare)
 
-1. Creare `.env.production.secondary` da `.env.production.secondary.example` con `POSTFIX_HOSTNAME`, `PUBLIC_HOSTNAME` e `CADDY_DOMAIN` = FQDN del nodo (es. `smtp.vetrobalsamo.com`), stesso `SYNC_SHARED_SECRET` del nodo A se in cluster.
+1. Creare `.env.production.secondary` da `.env.production.secondary.example` con `POSTFIX_HOSTNAME`, `PUBLIC_HOSTNAME` e `CADDY_DOMAIN` = FQDN del nodo (es. `smtp.vetrobalsamo.com`). Configurare la chiave sync per dominio nel tab **Cluster** su entrambi i nodi.
 2. Deploy: `./deploy.sh root@192.168.1.69 /opt/mail-exchange .env.production.secondary`
 3. Aprire **`http://<fqdn-o-ip>:60080`** (es. `http://192.168.1.69:60080`) — la UI è raggiungibile senza certificato valido.
 4. Login admin → **Configurazione** → verificare **URL pubblico** = FQDN del nodo.
@@ -417,8 +447,8 @@ Richiede un file env locale (`.env.production` per il nodo A, oppure terzo argom
 
 ```sql
 domains (
-  id, name UNIQUE, enabled, dkim_selector, sibling_fqdn,
-  relay_all_inbound, relay_source_ips,
+  id, name UNIQUE, enabled, dkim_selector, sibling_fqdn, sync_secret,
+  relay_all_inbound, relay_source_ips, dns_mx_hints,
   updated_at, created_at
 )
 
@@ -487,7 +517,9 @@ Tutte le route di gestione richiedono JWT, tranne `/api/health`, `/api/auth/logi
 | POST | `/api/stats/queue/{flush,delete,hold,release,pause,resume}` | Operazioni coda |
 | GET | `/api/notifications/errors/preview` | Anteprima guasti 30 min |
 | POST | `/api/notifications/errors/send` | Invio digest |
-| POST | `/api/sync/mailboxes` | Sync cluster (Bearer secret) |
+| POST | `/api/sync/domain-bundle` | Sync cluster bundle (Bearer secret) |
+| POST | `/api/sync/mailboxes` | Alias legacy sync cluster |
+| POST | `/api/domains/{id}/dkim/regenerate` | Rigenera chiavi DKIM (+ push cluster) |
 
 ### Sicurezza e DNS
 
@@ -540,9 +572,10 @@ Tutte le route di gestione richiedono JWT, tranne `/api/health`, `/api/auth/logi
 
 | Variabile | Default | Descrizione |
 |-----------|---------|-------------|
-| `SYNC_SHARED_SECRET` | — | Segreto Bearer inter-server |
 | `SYNC_TLS_VERIFY` | `true` | Verifica cert TLS peer |
 | `SYNC_HTTPS_PORT` | `60443` | Porta HTTPS sync |
+
+La chiave Bearer (`sync_secret`) si configura per dominio nel tab Cluster, non in `.env`.
 
 ### Docker Hub deploy
 

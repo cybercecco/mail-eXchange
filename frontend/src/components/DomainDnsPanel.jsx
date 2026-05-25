@@ -8,6 +8,7 @@ export default function DomainDnsPanel({ check }) {
         Nome record DKIM: <code>{check.dkim_selector}._domainkey.{check.domain}</code>
       </p>
       <DnsRecordCard title="SPF" record={check.spf} />
+      <DnsRecordCard title="MX" record={check.mx} expectedLabel="Record MX consigliati:" />
       <DnsRecordCard
         title="DKIM"
         record={check.dkim}

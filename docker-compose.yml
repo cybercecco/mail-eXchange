@@ -25,14 +25,15 @@ services:
       - ADMIN_USERNAME=${ADMIN_USERNAME}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - MFA_ISSUER=${MFA_ISSUER:-Mail Exchange}
-      - SYNC_SHARED_SECRET=${SYNC_SHARED_SECRET:-}
       - SYNC_TLS_VERIFY=${SYNC_TLS_VERIFY:-true}
       - SYNC_HTTPS_PORT=${SYNC_HTTPS_PORT:-60443}
+      - OPENDKIM_KEYS_DIR=/etc/opendkim/keys
       - COMPOSE_PROJECT_DIR=/compose
       - COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME:-}
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       - mail-data:/data
+      - dkim-keys:/etc/opendkim/keys
       # Riavvio servizi da pannello admin: socket Docker (ro) + CLI nel container api
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Compose del progetto (read-only) per applicare DNS/Caddy dopo impostazioni pubbliche

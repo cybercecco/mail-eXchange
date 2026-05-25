@@ -13,6 +13,10 @@ export default function App() {
       sessionStorage.setItem("mx-open-tab", "caselle");
       window.history.replaceState(null, "", "/domains");
     }
+    if (path === "/dns") {
+      sessionStorage.setItem("mx-open-tab", "dns");
+      window.history.replaceState(null, "", "/domains");
+    }
   }, []);
 
   useEffect(() => {

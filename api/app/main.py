@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Annotated, Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -54,6 +54,7 @@ from app.domains import (
     DomainUpdate,
     create_domain,
     delete_domain,
+    get_domain,
     list_domains,
     resolve_domain_for_mailbox,
     update_domain,
@@ -80,11 +81,13 @@ from app.mailbox_import import import_mailboxes_csv
 from app.regenerate import regenerate_files
 from app.spamassassin import SpamSettings, normalize_settings
 from app.sync import (
+    SyncDomainBundlePayload,
     SyncMailboxesPayload,
+    apply_incoming_domain_sync,
     apply_incoming_mailbox_sync,
     attach_sync_warning,
     touch_domain_updated_at,
-    verify_sync_secret,
+    verify_sync_auth,
 )
 from app.traffic_stats import collect_queue_listing, collect_traffic_stats, read_queue_snapshot
 from app.users import UserCreate, UserUpdate, create_user, delete_user, list_users, update_user
@@ -100,6 +103,16 @@ app.add_middleware(
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 AdminUser = Annotated[dict, Depends(require_admin)]
+
+
+def _reject_sync_secret_for_non_admin(payload: DomainCreate | DomainUpdate, user: dict) -> None:
+    if user.get("role") == "admin":
+        return
+    if isinstance(payload, DomainCreate):
+        if payload.sync_secret:
+            raise HTTPException(status_code=403, detail="Admin required for sync secret")
+    elif "sync_secret" in payload.model_fields_set:
+        raise HTTPException(status_code=403, detail="Admin required for sync secret")
 
 
 class MailboxCreate(BaseModel):
@@ -243,7 +256,8 @@ def api_list_domains(_user: CurrentUser) -> list[dict]:
 
 
 @app.post("/api/domains")
-def api_create_domain(payload: DomainCreate, _user: CurrentUser) -> dict:
+def api_create_domain(payload: DomainCreate, user: CurrentUser) -> dict:
+    _reject_sync_secret_for_non_admin(payload, user)
     result = create_domain(payload)
     regenerate_files()
     if result.get("sibling_fqdn"):
@@ -252,10 +266,33 @@ def api_create_domain(payload: DomainCreate, _user: CurrentUser) -> dict:
 
 
 @app.put("/api/domains/{domain_id}")
-def api_update_domain(domain_id: int, payload: DomainUpdate, _user: CurrentUser) -> dict:
+def api_update_domain(domain_id: int, payload: DomainUpdate, user: CurrentUser) -> dict:
+    _reject_sync_secret_for_non_admin(payload, user)
+    row = get_domain(domain_id)
     result = update_domain(domain_id, payload)
     regenerate_files()
-    if "sibling_fqdn" in payload.model_fields_set and result.get("sibling_fqdn"):
+    sibling = result.get("sibling_fqdn") or row["sibling_fqdn"]
+    should_push = bool(
+        sibling
+        and (
+            ("sibling_fqdn" in payload.model_fields_set and result.get("sibling_fqdn"))
+            or "dkim_selector" in payload.model_fields_set
+        )
+    )
+    if should_push:
+        result = attach_sync_warning(result, domain_id)
+    return result
+
+
+@app.post("/api/domains/{domain_id}/dkim/regenerate")
+def api_regenerate_domain_dkim(domain_id: int, _user: CurrentUser) -> dict:
+    from app.dkim_keys import regenerate_dkim_key_pair
+
+    row = get_domain(domain_id)
+    regenerate_dkim_key_pair(row["name"], row["dkim_selector"])
+    regenerate_files()
+    result = {"status": "regenerated"}
+    if row["sibling_fqdn"]:
         result = attach_sync_warning(result, domain_id)
     return result
 
@@ -567,9 +604,19 @@ def api_errors_send(_admin: AdminUser, force: bool = Query(default=False)) -> di
 @app.post("/api/sync/mailboxes")
 def api_sync_mailboxes(
     payload: SyncMailboxesPayload,
-    _auth: Annotated[None, Depends(verify_sync_secret)],
+    authorization: Annotated[Optional[str], Header(alias="Authorization")] = None,
 ) -> dict:
+    verify_sync_auth(payload.domain_name, authorization)
     return apply_incoming_mailbox_sync(payload)
+
+
+@app.post("/api/sync/domain-bundle")
+def api_sync_domain_bundle(
+    payload: SyncDomainBundlePayload,
+    authorization: Annotated[Optional[str], Header(alias="Authorization")] = None,
+) -> dict:
+    verify_sync_auth(payload.domain_name, authorization)
+    return apply_incoming_domain_sync(payload)
 
 
 @app.put("/api/spamassassin")

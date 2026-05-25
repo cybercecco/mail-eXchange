@@ -16,7 +16,9 @@ Quando una richiesta è stata completata da uno o più agent (subagent) o da un 
 
    Host predefinito: `root@172.22.11.125`, directory remota: `/opt/mail-exchange`. Richiede `.env.production` in locale.
 
-3. Riporta esito del deploy (successo o errore SSH/build) all'utente.
-4. Non fare deploy se l'utente ha chiesto esplicitamente di non deployare, o se non ci sono cambiamenti da pubblicare.
+3. Dopo un deploy riuscito con modifiche al codice, esegui `git push` verso GitHub (origin) così il remoto resta allineato al commit deployato. Non committare file segreti (`.env`, `.env.production`, credenziali).
+
+4. Riporta esito del deploy (successo o errore SSH/build) e del push all'utente.
+5. Non fare deploy se l'utente ha chiesto esplicitamente di non deployare, o se non ci sono cambiamenti da pubblicare.
 
 Non committare su git salvo richiesta esplicita; il deploy usa il working tree corrente.

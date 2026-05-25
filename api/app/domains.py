@@ -1,6 +1,7 @@
+import json
 import re
 import sqlite3
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
@@ -23,6 +24,7 @@ class DomainCreate(BaseModel):
     enabled: bool = True
     dkim_selector: str = Field(default="mail", min_length=1, max_length=63)
     sibling_fqdn: Optional[str] = Field(default=None, max_length=253)
+    sync_secret: Optional[str] = Field(default=None, max_length=512)
     relay_all_inbound: bool = False
     relay_source_ips: list[str] = Field(default_factory=list)
 
@@ -31,12 +33,49 @@ class DomainUpdate(BaseModel):
     enabled: Optional[bool] = None
     dkim_selector: Optional[str] = Field(default=None, min_length=1, max_length=63)
     sibling_fqdn: Optional[str] = Field(default=None, max_length=253)
+    sync_secret: Optional[str] = Field(default=None, max_length=512)
     relay_all_inbound: Optional[bool] = None
     relay_source_ips: Optional[list[str]] = None
 
 
 def normalize_domain(name: str) -> str:
     return name.strip().lower()
+
+
+def _dns_mx_hints_from_db(raw: str | None) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    hints: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        host = str(item.get("host") or "").strip()
+        if not host:
+            continue
+        hints.append(
+            {
+                "priority": int(item.get("priority") or 10),
+                "host": host,
+            }
+        )
+    return sorted(hints, key=lambda row: (row["priority"], row["host"]))
+
+
+def sync_secret_configured(raw: str | None) -> bool:
+    return bool((raw or "").strip())
+
+
+def normalize_sync_secret(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def validate_domain_name(name: str) -> str:
@@ -61,7 +100,8 @@ def list_domains() -> list[dict]:
         rows = conn.execute(
             """
             SELECT d.id, d.name, d.enabled, d.dkim_selector, d.sibling_fqdn,
-                   d.relay_all_inbound, d.relay_source_ips, d.updated_at, d.created_at,
+                   d.sync_secret, d.relay_all_inbound, d.relay_source_ips, d.dns_mx_hints,
+                   d.updated_at, d.created_at,
                    COUNT(m.id) AS mailbox_count
             FROM domains d
             LEFT JOIN mailboxes m ON m.domain_id = d.id
@@ -73,8 +113,11 @@ def list_domains() -> list[dict]:
     result = []
     for row in rows:
         item = dict(row)
+        item["sync_secret_configured"] = sync_secret_configured(row["sync_secret"])
+        del item["sync_secret"]
         item["destinations"] = destinations_by_domain.get(row["id"], [])
         item["relay_source_ips"] = relay_source_ips_from_db(row["relay_source_ips"])
+        item["dns_mx_hints"] = _dns_mx_hints_from_db(row["dns_mx_hints"])
         result.append(item)
     return result
 
@@ -85,6 +128,7 @@ def create_domain(payload: DomainCreate) -> dict:
     name = validate_domain_name(payload.name)
     selector = (payload.dkim_selector or DEFAULT_DKIM_SELECTOR).strip()
     sibling_fqdn = normalize_sibling_fqdn(payload.sibling_fqdn)
+    sync_secret = normalize_sync_secret(payload.sync_secret)
     relay_ips = normalize_relay_source_ips(payload.relay_source_ips)
     relay_ips_db = relay_source_ips_to_db(relay_ips)
     with db() as conn:
@@ -92,14 +136,15 @@ def create_domain(payload: DomainCreate) -> dict:
             cursor = conn.execute(
                 """
                 INSERT INTO domains (name, enabled, dkim_selector, sibling_fqdn,
-                                     relay_all_inbound, relay_source_ips)
-                VALUES (?, ?, ?, ?, ?, ?)
+                                     sync_secret, relay_all_inbound, relay_source_ips)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
                     int(payload.enabled),
                     selector,
                     sibling_fqdn,
+                    sync_secret,
                     int(payload.relay_all_inbound),
                     relay_ips_db,
                 ),
@@ -107,7 +152,12 @@ def create_domain(payload: DomainCreate) -> dict:
             conn.commit()
         except sqlite3.IntegrityError as exc:
             raise HTTPException(status_code=409, detail="Domain already exists") from exc
-    return {"id": cursor.lastrowid, "name": name, "sibling_fqdn": sibling_fqdn}
+    return {
+        "id": cursor.lastrowid,
+        "name": name,
+        "sibling_fqdn": sibling_fqdn,
+        "sync_secret_configured": sync_secret_configured(sync_secret),
+    }
 
 
 def update_domain(domain_id: int, payload: DomainUpdate) -> dict:
@@ -120,6 +170,10 @@ def update_domain(domain_id: int, payload: DomainUpdate) -> dict:
         sibling_fqdn = normalize_sibling_fqdn(payload.sibling_fqdn)
     else:
         sibling_fqdn = row["sibling_fqdn"]
+    if "sync_secret" in payload.model_fields_set:
+        sync_secret = normalize_sync_secret(payload.sync_secret)
+    else:
+        sync_secret = row["sync_secret"]
     relay_all_inbound = (
         int(payload.relay_all_inbound)
         if payload.relay_all_inbound is not None
@@ -135,7 +189,7 @@ def update_domain(domain_id: int, payload: DomainUpdate) -> dict:
             """
             UPDATE domains
             SET enabled = ?, dkim_selector = ?, sibling_fqdn = ?,
-                relay_all_inbound = ?, relay_source_ips = ?,
+                sync_secret = ?, relay_all_inbound = ?, relay_source_ips = ?,
                 updated_at = datetime('now')
             WHERE id = ?
             """,
@@ -143,13 +197,18 @@ def update_domain(domain_id: int, payload: DomainUpdate) -> dict:
                 enabled,
                 selector.strip(),
                 sibling_fqdn,
+                sync_secret,
                 relay_all_inbound,
                 relay_ips_db,
                 domain_id,
             ),
         )
         conn.commit()
-    return {"status": "updated", "sibling_fqdn": sibling_fqdn}
+    return {
+        "status": "updated",
+        "sibling_fqdn": sibling_fqdn,
+        "sync_secret_configured": sync_secret_configured(sync_secret),
+    }
 
 
 def delete_domain(domain_id: int) -> dict:

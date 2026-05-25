@@ -1,4 +1,5 @@
 import ipaddress
+import json
 import os
 import re
 from pathlib import Path
@@ -354,6 +355,91 @@ def _check_dmarc(domain: str) -> dict[str, Any]:
     }
 
 
+def _read_mx_hints(domain: str) -> list[dict[str, Any]]:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT dns_mx_hints FROM domains WHERE name = ? COLLATE NOCASE",
+            (domain.strip().lower(),),
+        ).fetchone()
+    if not row or not row["dns_mx_hints"]:
+        return []
+    try:
+        data = json.loads(row["dns_mx_hints"])
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    hints: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        host = str(item.get("host") or "").strip().lower().rstrip(".")
+        if not host:
+            continue
+        hints.append({"priority": int(item.get("priority") or 10), "host": host})
+    return sorted(hints, key=lambda row: (row["priority"], row["host"]))
+
+
+def _format_mx_expected(records: list[dict[str, Any]]) -> list[str]:
+    return [f"{int(row['priority'])} {row['host']}" for row in records]
+
+
+def _check_mx(domain: str, hints: list[dict[str, Any]]) -> dict[str, Any]:
+    local_records = []
+    for priority, host in ((10, POSTFIX_HOSTNAME), (20, PUBLIC_HOSTNAME or "")):
+        normalized = (host or "").strip().lower().rstrip(".")
+        if normalized and normalized not in {row["host"] for row in local_records}:
+            local_records.append({"priority": priority, "host": normalized})
+
+    expected_by_host = {row["host"]: row for row in local_records}
+    for hint in hints:
+        expected_by_host.setdefault(hint["host"], hint)
+    expected = sorted(expected_by_host.values(), key=lambda row: (row["priority"], row["host"]))
+
+    try:
+        answers = _make_resolver().resolve(domain, "MX")
+    except dns.exception.DNSException as exc:
+        return {
+            "name": domain,
+            "status": "error",
+            "found": [],
+            "expected": _format_mx_expected(expected),
+            "cluster_hints": hints,
+            "messages": [f"Query MX fallita: {exc}"],
+        }
+
+    found: list[str] = []
+    found_hosts: set[str] = set()
+    for answer in answers:
+        host = str(answer.exchange).strip().lower().rstrip(".")
+        found.append(f"{int(answer.preference)} {host}")
+        found_hosts.add(host)
+
+    messages: list[str] = []
+    status = "ok"
+    missing = [row for row in expected if row["host"] not in found_hosts]
+    if missing:
+        status = "warning"
+        messages.append(
+            "Record MX mancanti per il cluster: "
+            + ", ".join(_format_mx_expected(missing))
+        )
+    elif found:
+        messages.append("Record MX trovati.")
+    else:
+        status = "error"
+        messages.append("Nessun record MX pubblicato per il dominio.")
+
+    return {
+        "name": domain,
+        "status": status,
+        "found": sorted(found),
+        "expected": _format_mx_expected(expected),
+        "cluster_hints": hints,
+        "messages": messages,
+    }
+
+
 def check_dns_for_domain(
     domain: str, dkim_selector: str | None = None
 ) -> dict[str, Any]:
@@ -368,12 +454,14 @@ def check_dns_for_domain(
         selector = row["dkim_selector"] or selector
 
     smtp_hostname = _smtp_dns_hostname()
+    mx_hints = _read_mx_hints(domain)
     return {
         "domain": domain,
         "hostname": POSTFIX_HOSTNAME,
         "smtp_hostname": smtp_hostname,
         "dkim_selector": selector,
         "spf": _check_spf(domain),
+        "mx": _check_mx(domain, mx_hints),
         "dkim": _check_dkim(domain, selector),
         "dmarc": _check_dmarc(domain),
     }

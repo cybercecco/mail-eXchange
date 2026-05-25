@@ -3,8 +3,8 @@ import { api, apiUpload } from "./api";
 import Layout from "./components/Layout";
 import { useTheme } from "./hooks/useTheme";
 import DomainsPage from "./pages/DomainsPage";
-import DnsPage from "./pages/DnsPage";
 import SpamPage from "./pages/SpamPage";
+import QuarantinePage from "./pages/QuarantinePage";
 import MfaPage from "./pages/MfaPage";
 import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
@@ -22,10 +22,6 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
   });
   const [domains, setDomains] = useState([]);
   const [mailboxes, setMailboxes] = useState([]);
-  const [dns, setDns] = useState(null);
-  const [dnsLoading, setDnsLoading] = useState(false);
-  const [dnsDomain, setDnsDomain] = useState("");
-  const [dnsInitialized, setDnsInitialized] = useState(false);
   const [domainForm, setDomainForm] = useState({ name: "", dkim_selector: "mail", sibling_fqdn: "" });
   const [syncWarning, setSyncWarning] = useState("");
   const [mailboxForm, setMailboxForm] = useState({
@@ -85,26 +81,6 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
     [domains]
   );
 
-  const loadDns = useCallback(
-    async (domainName) => {
-      const domain = (domainName ?? dnsDomain).trim();
-      if (!domain) {
-        setDns(null);
-        return;
-      }
-      setDnsLoading(true);
-      try {
-        const data = await api(`/dns/check?domain=${encodeURIComponent(domain)}`);
-        setDns(data);
-      } catch (err) {
-        handleAuthError(err);
-      } finally {
-        setDnsLoading(false);
-      }
-    },
-    [dnsDomain, handleAuthError]
-  );
-
   const loadUsers = useCallback(async () => {
     if (!isAdmin) return;
     try {
@@ -156,24 +132,6 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
       loadUsers();
     }
   }, [activePage, isAdmin, loadUsers]);
-
-  useEffect(() => {
-    const first = enabledDomains[0]?.name ?? "";
-    setDnsDomain((prev) => {
-      if (prev && enabledDomains.some((d) => d.name === prev)) return prev;
-      return first;
-    });
-    if (!first) {
-      setDns(null);
-      setDnsInitialized(false);
-    }
-  }, [domains]);
-
-  useEffect(() => {
-    if (!dnsDomain || dnsInitialized) return;
-    loadDns(dnsDomain);
-    setDnsInitialized(true);
-  }, [dnsDomain, dnsInitialized, loadDns]);
 
   async function addDomain(event) {
     event.preventDefault();
@@ -422,19 +380,15 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
             onError={(msg) => (msg ? setError(msg) : setError(""))}
           />
         );
-      case "dns":
-        return (
-          <DnsPage
-            dns={dns}
-            dnsLoading={dnsLoading}
-            enabledDomains={enabledDomains}
-            dnsDomain={dnsDomain}
-            onDnsDomainChange={setDnsDomain}
-            onRefreshDns={() => loadDns(dnsDomain)}
-          />
-        );
       case "spam":
         return <SpamPage onError={(msg) => (msg ? setError(msg) : setError(""))} />;
+      case "quarantine":
+        if (!isAdmin) {
+          return (
+            <p className="empty-state">Solo gli amministratori possono gestire la quarantena.</p>
+          );
+        }
+        return <QuarantinePage onError={(msg) => (msg ? setError(msg) : setError(""))} />;
       case "traffic":
         return <TrafficPage isAdmin={isAdmin} />;
       case "mfa":
