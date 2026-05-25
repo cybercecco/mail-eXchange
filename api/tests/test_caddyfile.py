@@ -70,6 +70,7 @@ class WriteCaddyfileTest(unittest.TestCase):
             write_caddyfile()
         content = (self.generated_dir / "Caddyfile").read_text(encoding="utf-8")
         self.assertIn("dns cloudflare {$CLOUDFLARE_API_TOKEN}", content)
+        self.assertIn(":80 {", content)
+        self.assertIn("https://smtp.vetrobalsamo.com {", content)
         self.assertNotIn("tls internal", content)
-        self.assertNotIn(":80 {", content)
         self.assertFalse((self.generated_dir / "caddy.env").exists())

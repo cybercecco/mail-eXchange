@@ -158,6 +158,28 @@ def delete_destination(domain_id: int, destination_id: int) -> dict:
     return {"status": "deleted"}
 
 
+def resolve_destination_by_label(domain_id: int, label: str) -> tuple[str, int]:
+    normalized = (label or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Destination label is required")
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT host, port FROM domain_destinations
+            WHERE domain_id = ? AND lower(trim(label)) = lower(trim(?))
+            ORDER BY id
+            LIMIT 1
+            """,
+            (domain_id, normalized),
+        ).fetchone()
+    if not row:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Destination label '{normalized}' not found for this domain",
+        )
+    return row["host"], int(row["port"])
+
+
 def resolve_destination_for_mailbox(
     domain_id: int, destination_host: str, destination_port: int
 ) -> None:

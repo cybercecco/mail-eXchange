@@ -47,14 +47,15 @@ export default function ImportCsvModal({
         </div>
 
         <p className="panel-hint">
-          Colonne: <code>mail</code>, <code>destinazione</code>, <code>porta</code> (opzionale, default 25).
-          Con intestazione nella prima riga, lascia il checkbox deselezionato; se la salti, le colonne sono lette in ordine
-          (mail, destinazione, porta). Il dominio si ricava dall&apos;email; host e porta devono
-          corrispondere a un server di destinazione già configurato per quel dominio in Domini.
+          Colonne: <code>mail</code> (oppure <code>local</code> + <code>domain</code>) e{" "}
+          <code>destination_label</code> (etichetta del server in Domini, non host/porta).
+          Con intestazione nella prima riga, lascia il checkbox deselezionato; senza intestazione l&apos;ordine è
+          mail, etichetta. Il dominio si ricava dall&apos;email; l&apos;etichetta deve esistere tra le destinazioni del
+          dominio (confronto senza distinzione maiuscole/minuscole). CSV con host/porta è ancora accettato ma deprecato.
         </p>
-        <pre className="csv-example">{`mail,destinazione,porta
-info@vetrobalsamo.com,mail.protection.outlook.com,25
-user@moretto.mobi,192.168.1.70,25`}</pre>
+        <pre className="csv-example">{`mail,destination_label
+info@vetrobalsamo.com,Microsoft 365
+user@moretto.mobi,Server interno`}</pre>
 
         <form
           onSubmit={(e) => {

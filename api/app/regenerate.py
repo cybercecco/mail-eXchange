@@ -27,10 +27,16 @@ def write_caddyfile() -> None:
 }}
 """
     if token:
+        # Con token: HTTP su :80 per IP/fallback; HTTPS con LE DNS-01 solo sul FQDN.
         content = (
             global_block
-            + f"""
-{hostname} {{
+            + """
+:80 {
+\treverse_proxy mx-frontend:80
+}
+
+"""
+            + f"""https://{hostname} {{
 \ttls {{
 \t\tdns cloudflare {{$CLOUDFLARE_API_TOKEN}}
 \t\tresolvers 1.1.1.1 1.0.0.1 8.8.8.8

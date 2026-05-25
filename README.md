@@ -165,7 +165,8 @@ Ogni dominio ha **sotto-tab**:
 Formato CSV supportato:
 
 - Delimitatore `,` o `;` (auto-rilevato).
-- Colonne riconosciute (header): `mail`/`email`, `destinazione`/`destination`/`host`, `porta`/`port` (opzionale, default 25).
+- Colonne (header): `mail`/`email` oppure `local`+`domain`, più `destination_label`/`label`/`destinazione` (etichetta server in Domini, **non** host).
+- Senza intestazione: ordine `mail`, `destination_label` (due colonne). Tre colonne con porta numerica = formato legacy host/porta (deprecato).
 - Opzioni import:
   - **Salta prima riga** (intestazione).
   - **Aggiorna caselle esistenti** (stessa email).
@@ -173,12 +174,14 @@ Formato CSV supportato:
 Esempio:
 
 ```csv
-mail,destinazione,porta
-user@example.com,192.168.1.10,25
-admin@example.com,mail.internal,587
+mail,destination_label
+user@example.com,Primary
+admin@example.com,Backup MX
 ```
 
-Requisiti: dominio abilitato per l'email; destinazione deve esistere nel dominio.
+All'import l'etichetta viene risolta sulla destinazione **locale** del dominio (`host`/`port` del nodo). Requisiti: dominio abilitato; etichetta presente in `domain_destinations` per quel dominio.
+
+Formato legacy (deprecato): `mail`, `destination_host`/`host`, `porta` opzionale.
 
 ---
 
