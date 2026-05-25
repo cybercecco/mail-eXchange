@@ -278,7 +278,6 @@ submission inet n       -       y       -       -       smtpd
   -o smtpd_tls_security_level=encrypt
   -o smtpd_sasl_auth_enable=yes
   -o smtpd_tls_auth_only=yes
-  -o smtpd_relay_restrictions=permit_mynetworks,permit_sasl_authenticated,check_sender_access hash:/etc/postfix/generated/relay_sender_access,reject
   -o smtpd_recipient_restrictions=reject_unauth_destination,reject_non_fqdn_recipient,reject_unknown_recipient_domain
 EOF
 }

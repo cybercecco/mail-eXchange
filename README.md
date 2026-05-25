@@ -320,7 +320,7 @@ Pagina **Sistema → Stato & sessione**:
 - Pattern: error/fatal/reject, bounce/defer, SPAM/INFECT blocked, errori ClamAV/OpenDKIM.
 - Email agli utenti con `notify_email` configurato (profilo account).
 - Digest inviato solo se fingerprint errori **cambiata** (no spam duplicati).
-- Esclusi warning generici Postfix/Amavis.
+- Esclusi warning generici Postfix/Amavis (incluso `dict_nis_init: NIS domain name not set`).
 
 ---
 
@@ -622,6 +622,18 @@ docker compose up -d
 ---
 
 ## Note operative / Operational notes
+
+### Risoluzione problemi / Troubleshooting
+
+#### Postfix: `dict_nis_init: NIS domain name not set - NIS lookups disabled`
+
+**IT** — Avviso informativo emesso all'avvio di ogni processo `smtpd` (SMTP/submission). Postfix Debian è compilato con supporto NIS (Network Information Service, servizio legacy di directory Unix); all'inizializzazione verifica se esiste un dominio NIS locale. In container Docker e installazioni moderne non c'è NIS configurato: Postfix disabilita le lookup NIS e prosegue normalmente.
+
+In `infra/postfix/main.cf` **non** sono usate mappe `nis:` né `nisplus:` (solo `hash:` e `regexp:`). L'avviso **non indica un guasto** e non influisce su consegna, relay o TLS. Può essere ignorato in sicurezza.
+
+**EN** — Informational warning on each `smtpd` process start. Debian Postfix is built with optional NIS lookup support; without a local NIS domain, lookups are disabled and mail flow is unaffected. No `nis:` / `nisplus:` maps are configured. Safe to ignore.
+
+---
 
 - `MAIL_DOMAIN` non limita i nuovi domini; serve per migrazione installazioni legacy.
 - SpamAssassin/Amavis: policy globali; domini Amavis seguono `virtual_alias_domains` generato.
