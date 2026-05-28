@@ -13,10 +13,34 @@ const TIME_WINDOWS = [
 ];
 
 const METRICS = [
-  { key: "ingresso", label: "Ingresso", color: "var(--accent)", queueType: "incoming" },
-  { key: "in_coda", label: "In coda (antispam/AV)", color: "var(--status-warn-fg)", queueType: "active" },
-  { key: "bloccate", label: "Bloccate", color: "var(--status-err-fg)", queueType: "blocked" },
-  { key: "in_uscita", label: "In uscita", color: "var(--status-ok-fg)", queueType: "outgoing" }
+  {
+    key: "ingresso",
+    label: "Ingresso",
+    hint: "Messaggi accettati da smtpd nella finestra (1 conteggio per queue ID).",
+    color: "var(--accent)",
+    queueType: "incoming"
+  },
+  {
+    key: "in_coda",
+    label: "In coda (antispam/AV)",
+    hint: "Messaggi attualmente in coda Postfix attiva (tempo reale, snapshot ~5 s).",
+    color: "var(--status-warn-fg)",
+    queueType: "active"
+  },
+  {
+    key: "bloccate",
+    label: "Bloccate",
+    hint: "Messaggi rifiutati o bloccati da Amavis/Postfix nella finestra (no warning di sistema).",
+    color: "var(--status-err-fg)",
+    queueType: "blocked"
+  },
+  {
+    key: "in_uscita",
+    label: "In uscita",
+    hint: "Messaggi consegnati all'esterno (status=sent) nella finestra (1 conteggio per queue ID).",
+    color: "var(--status-ok-fg)",
+    queueType: "outgoing"
+  }
 ];
 
 const QUEUE_DETAIL = [
@@ -258,9 +282,10 @@ export default function TrafficPage({ isAdmin }) {
         <div>
           <h2>Traffico mail</h2>
           <p>
-            Conteggi recenti da log Postfix/Amavis e stato code in tempo reale. Clicca su card,
-            barre o badge coda per vedere i messaggi. Finestra attuale: ultimi{" "}
-            {windowLabel(windowMinutes)}.
+            Andamento del transito mail: conteggi per messaggio (queue ID), non righe di log.
+            Ingresso, bloccate e uscita usano la finestra selezionata; in coda mostra lo snapshot
+            live della coda attiva Postfix/Amavis. Clicca su card, barre o badge per il dettaglio.
+            Finestra attuale: ultimi {windowLabel(windowMinutes)}.
           </p>
         </div>
         <div className="page-header-actions traffic-header-actions">
@@ -433,7 +458,7 @@ export default function TrafficPage({ isAdmin }) {
             type="button"
             className="traffic-card traffic-clickable"
             onClick={() => openQueueDetail(metric.queueType)}
-            title={`Apri contenuto: ${metric.label}`}
+            title={metric.hint || `Apri contenuto: ${metric.label}`}
           >
             <span className="traffic-card-label">{metric.label}</span>
             <strong className="traffic-card-value">{stats?.[metric.key] ?? (loading ? "…" : 0)}</strong>
@@ -442,7 +467,11 @@ export default function TrafficPage({ isAdmin }) {
       </div>
 
       <div className="panel traffic-chart-panel">
-        <h3>Andamento ({windowLabel(windowMinutes)})</h3>
+        <h3>Andamento transito ({windowLabel(windowMinutes)})</h3>
+        <p className="panel-hint traffic-chart-hint">
+          Ogni barra rappresenta messaggi unici in transito. &ldquo;In coda&rdquo; è tempo reale;
+          le altre metriche coprono la finestra selezionata.
+        </p>
         <div className="traffic-chart" role="img" aria-label="Grafico a barre del traffico mail">
           {METRICS.map((metric) => {
             const value = stats?.[metric.key] ?? 0;
@@ -453,7 +482,7 @@ export default function TrafficPage({ isAdmin }) {
                 type="button"
                 className="traffic-bar-col traffic-clickable"
                 onClick={() => openQueueDetail(metric.queueType)}
-                title={`Apri contenuto: ${metric.label}`}
+                title={metric.hint || `Apri contenuto: ${metric.label}`}
               >
                 <div className="traffic-bar-track">
                   <div

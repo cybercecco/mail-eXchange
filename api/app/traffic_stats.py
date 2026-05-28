@@ -22,14 +22,16 @@ POSTFIX_SENT = re.compile(
     r"postfix/smtp\[\d+\]:\s+(?P<qid>[A-F0-9]+):.*status=sent\s+\((?P<detail>[^)]+)\)",
     re.I,
 )
-POSTFIX_BLOCKED = re.compile(
-    r"postfix/(?:smtpd|smtp|qmgr|cleanup)\[\d+\]:\s+"
-    r"(?:NOQUEUE:\s+)?(?:(?:milter-)?reject|warning):\s|"
-    r"postfix/smtp\[\d+\]:\s+(?P<qid>[A-F0-9]+):.*status=bounced",
+POSTFIX_NOQUEUE_REJECT = re.compile(
+    r"postfix/(?:smtpd|smtp|qmgr|cleanup)\[\d+\]:\s+NOQUEUE:\s+(?:milter-)?reject:",
+    re.I,
+)
+POSTFIX_QID_REJECT = re.compile(
+    r"postfix/(?:smtpd|smtp|qmgr|cleanup)\[\d+\]:\s+(?P<qid>[A-F0-9]+):.*?(?:milter-reject|reject):",
     re.I,
 )
 POSTFIX_REJECT_DETAIL = re.compile(
-    r"(?:NOQUEUE:\s+)?(?:(?:milter-)?reject|warning):\s(?P<reason>[^;]+)(?:;\s+from=<(?P<from>[^>]*)>)?"
+    r"(?:NOQUEUE:\s+)?(?:milter-)?reject:\s(?P<reason>[^;]+)(?:;\s+from=<(?P<from>[^>]*)>)?"
     r"(?:\s+to=<(?P<to>[^>]*)>)?",
     re.I,
 )
@@ -43,8 +45,13 @@ POSTFIX_CLIENT = re.compile(
 )
 POSTFIX_FROM = re.compile(r"from=<(?P<from>[^>]*)>", re.I)
 POSTFIX_TO = re.compile(r"to=<(?P<to>[^>]*)>", re.I)
+POSTFIX_BLOCK_EXCLUDE = re.compile(
+    r"dict_nis_init|NIS domain name not set|warning:\s|milter.*warning",
+    re.I,
+)
 AMAVIS_BLOCKED = re.compile(
-    r"\)\s+Blocked\s+(?P<reason>SPAM|INFECT(?:ED)?|BAD\s+HEADER|NAME|BANNED|BLACKLISTED|"
+    r"(?P<msg_id>\([^)]+\))\s+Blocked\s+"
+    r"(?P<reason>SPAM|INFECT(?:ED)?|BAD\s+HEADER|NAME|BANNED|BLACKLISTED|"
     r"FORGED|VIRUS|PHISHING|MIME|UNWANTED|MULTIPLE)",
     re.I,
 )
@@ -124,14 +131,17 @@ def _tail_lines(path: Path, max_bytes: int = 512_000) -> list[str]:
     return data.splitlines()
 
 
-def _is_outgoing_relay(detail: str) -> bool:
-    lowered = detail.lower()
+def _is_outgoing_relay(line: str, detail: str) -> bool:
+    lowered = line.lower()
     if "amavis" in lowered:
         return False
     if "127.0.0.1" in lowered and "10025" in lowered:
         return False
     if "[127.0.0.1" in lowered:
         return False
+    if "relay=localhost" in lowered and "10025" in lowered:
+        return False
+    _ = detail
     return True
 
 
@@ -154,11 +164,15 @@ def read_queue_snapshot() -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return empty
     raw_messages = payload.get("messages") or {}
+    active = int(payload.get("active", 0))
+    deferred = int(payload.get("deferred", 0))
+    hold = int(payload.get("hold", 0))
+    total = int(payload.get("total", active + deferred + hold))
     return {
-        "total": int(payload.get("total", 0)),
-        "active": int(payload.get("active", 0)),
-        "deferred": int(payload.get("deferred", 0)),
-        "hold": int(payload.get("hold", 0)),
+        "total": total,
+        "active": active,
+        "deferred": deferred,
+        "hold": hold,
         "updated_at": payload.get("updated_at"),
         "messages": {
             "active": list(raw_messages.get("active") or []),
@@ -168,27 +182,6 @@ def read_queue_snapshot() -> dict[str, Any]:
         "source_available": True,
         "collected_at": _now().isoformat(),
     }
-
-
-def _read_queue_snapshot() -> tuple[int, dict[str, int], bool, dict[str, Any]]:
-    empty_messages = {"active": [], "deferred": [], "hold": []}
-    if not QUEUE_SNAPSHOT.is_file():
-        return 0, {"active": 0, "deferred": 0, "hold": 0}, False, empty_messages
-    try:
-        payload = json.loads(QUEUE_SNAPSHOT.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return 0, {"active": 0, "deferred": 0, "hold": 0}, False, empty_messages
-    active = int(payload.get("active", 0))
-    deferred = int(payload.get("deferred", 0))
-    hold = int(payload.get("hold", 0))
-    total = int(payload.get("total", active + deferred + hold))
-    raw_messages = payload.get("messages") or {}
-    messages = {
-        "active": list(raw_messages.get("active") or []),
-        "deferred": list(raw_messages.get("deferred") or []),
-        "hold": list(raw_messages.get("hold") or []),
-    }
-    return total, {"active": active, "deferred": deferred, "hold": hold}, True, messages
 
 
 def _parse_postfix_arrival(arrival: str, ref: datetime) -> datetime | None:
@@ -243,14 +236,21 @@ def _enrich_queue_messages(messages: list[dict[str, Any]], ref: datetime) -> lis
     return enriched
 
 
-def _extract_blocked_from_line(line: str) -> dict[str, str] | None:
-    reject = POSTFIX_REJECT_DETAIL.search(line)
-    if reject:
-        return {
-            "from": reject.group("from") or "",
-            "to": reject.group("to") or "",
-            "reason": (reject.group("reason") or "").strip(),
-        }
+def _is_postfix_block_excluded(line: str) -> bool:
+    return bool(POSTFIX_BLOCK_EXCLUDE.search(line))
+
+
+def _block_dedupe_key(*, qid: str = "", msg_id: str = "", from_addr: str = "", to_addr: str = "", reason: str = "") -> str:
+    if qid:
+        return f"qid:{qid.upper()}"
+    if msg_id:
+        return f"amavis:{msg_id}"
+    return f"noqueue:{from_addr}:{to_addr}:{reason[:120]}"
+
+
+def _extract_postfix_block(line: str) -> dict[str, str] | None:
+    if _is_postfix_block_excluded(line):
+        return None
     bounced = POSTFIX_BOUNCED.search(line)
     if bounced:
         return {
@@ -259,120 +259,157 @@ def _extract_blocked_from_line(line: str) -> dict[str, str] | None:
             "to": "",
             "reason": (bounced.group("reason") or "").strip(),
         }
-    return None
-
-
-def _collect_blocked_messages(window_minutes: int, now: datetime, cutoff: datetime) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
-    postfix_log = LOGS_DIR / "postfix.log"
-    amavis_log = LOGS_DIR / "amavis.log"
-
-    for line in _tail_lines(postfix_log):
-        if not _in_window(line, now, cutoff):
-            continue
-        if not POSTFIX_BLOCKED.search(line):
-            continue
-        detail = _extract_blocked_from_line(line)
-        ts = _line_ts(line, now)
-        from_addr = detail["from"] if detail else ""
-        to_addr = detail["to"] if detail else ""
-        reason = detail["reason"] if detail else "blocked"
+    qid_reject = POSTFIX_QID_REJECT.search(line)
+    if qid_reject:
+        reject = POSTFIX_REJECT_DETAIL.search(line)
+        return {
+            "queue_id": qid_reject.group("qid") or "",
+            "from": reject.group("from") if reject and reject.group("from") else "",
+            "to": reject.group("to") if reject and reject.group("to") else "",
+            "reason": (reject.group("reason") if reject else "rejected").strip(),
+        }
+    if POSTFIX_NOQUEUE_REJECT.search(line):
+        reject = POSTFIX_REJECT_DETAIL.search(line)
+        from_addr = reject.group("from") if reject and reject.group("from") else ""
+        to_addr = reject.group("to") if reject and reject.group("to") else ""
         if not from_addr:
             from_match = POSTFIX_FROM.search(line)
             from_addr = from_match.group("from") if from_match else ""
         if not to_addr:
             to_match = POSTFIX_TO.search(line)
             to_addr = to_match.group("to") if to_match else ""
-        messages.append(
-            {
-                "timestamp": ts.isoformat() if ts else None,
-                "source": "postfix",
-                "queue_id": detail.get("queue_id", "") if detail else "",
-                "from": from_addr,
-                "to": [to_addr] if to_addr else [],
-                "reason": reason,
-                "summary": line.strip()[-240:],
-            }
-        )
+        return {
+            "queue_id": "",
+            "from": from_addr,
+            "to": to_addr,
+            "reason": (reject.group("reason") if reject else "rejected").strip(),
+        }
+    return None
 
-    for line in _tail_lines(amavis_log):
+
+def _parse_window_transit(
+    window_minutes: int,
+    now: datetime,
+    cutoff: datetime,
+) -> dict[str, Any]:
+    incoming_ids: set[str] = set()
+    outgoing_ids: set[str] = set()
+    blocked_keys: set[str] = set()
+    blocked_messages: dict[str, dict[str, Any]] = {}
+    incoming_messages: dict[str, dict[str, Any]] = {}
+    outgoing_messages: dict[str, dict[str, Any]] = {}
+
+    for line in _tail_lines(LOGS_DIR / "postfix.log"):
+        if not _in_window(line, now, cutoff):
+            continue
+        incoming = POSTFIX_INCOMING.search(line)
+        if incoming:
+            qid = incoming.group("qid")
+            incoming_ids.add(qid)
+            if qid not in incoming_messages:
+                ts = _line_ts(line, now)
+                client = POSTFIX_CLIENT.search(line)
+                incoming_messages[qid] = {
+                    "timestamp": ts.isoformat() if ts else None,
+                    "source": "postfix",
+                    "queue_id": qid,
+                    "from": "",
+                    "to": [],
+                    "client": client.group("client").strip() if client else "",
+                    "summary": line.strip()[-240:],
+                }
+            continue
+        sent = POSTFIX_SENT.search(line)
+        if sent and _is_outgoing_relay(line, sent.group("detail")):
+            qid = sent.group("qid")
+            outgoing_ids.add(qid)
+            if qid not in outgoing_messages:
+                ts = _line_ts(line, now)
+                from_match = POSTFIX_FROM.search(line)
+                to_match = POSTFIX_TO.search(line)
+                outgoing_messages[qid] = {
+                    "timestamp": ts.isoformat() if ts else None,
+                    "source": "postfix",
+                    "queue_id": qid,
+                    "from": from_match.group("from") if from_match else "",
+                    "to": [to_match.group("to")] if to_match else [],
+                    "reason": sent.group("detail").strip(),
+                    "summary": line.strip()[-240:],
+                }
+            continue
+        block = _extract_postfix_block(line)
+        if not block:
+            continue
+        key = _block_dedupe_key(
+            qid=block.get("queue_id", ""),
+            from_addr=block.get("from", ""),
+            to_addr=block.get("to", ""),
+            reason=block.get("reason", ""),
+        )
+        if key in blocked_keys:
+            continue
+        blocked_keys.add(key)
+        ts = _line_ts(line, now)
+        blocked_messages[key] = {
+            "timestamp": ts.isoformat() if ts else None,
+            "source": "postfix",
+            "queue_id": block.get("queue_id", ""),
+            "from": block.get("from", ""),
+            "to": [block.get("to", "")] if block.get("to") else [],
+            "reason": block.get("reason", "blocked"),
+            "summary": line.strip()[-240:],
+        }
+
+    for line in _tail_lines(LOGS_DIR / "amavis.log"):
         if not _in_window(line, now, cutoff):
             continue
         blocked = AMAVIS_BLOCKED.search(line)
         if not blocked:
             continue
-        ts = _line_ts(line, now)
         route = AMAVIS_ROUTE.search(line)
-        messages.append(
-            {
-                "timestamp": ts.isoformat() if ts else None,
-                "source": "amavis",
-                "queue_id": "",
-                "from": route.group("from") if route else "",
-                "to": [route.group("to")] if route else [],
-                "reason": f"Blocked {blocked.group('reason')}",
-                "summary": line.strip()[-240:],
-            }
-        )
+        from_addr = route.group("from") if route else ""
+        to_addr = route.group("to") if route else ""
+        reason = f"Blocked {blocked.group('reason')}"
+        key = _block_dedupe_key(msg_id=blocked.group("msg_id"), from_addr=from_addr, to_addr=to_addr, reason=reason)
+        if key in blocked_keys:
+            continue
+        blocked_keys.add(key)
+        ts = _line_ts(line, now)
+        blocked_messages[key] = {
+            "timestamp": ts.isoformat() if ts else None,
+            "source": "amavis",
+            "queue_id": "",
+            "from": from_addr,
+            "to": [to_addr] if to_addr else [],
+            "reason": reason,
+            "summary": line.strip()[-240:],
+        }
 
-    messages.sort(key=lambda row: row.get("timestamp") or "", reverse=True)
-    return messages
+    def _sort_messages(rows: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        items = list(rows.values())
+        items.sort(key=lambda row: row.get("timestamp") or "", reverse=True)
+        return items
+
+    return {
+        "incoming_ids": incoming_ids,
+        "outgoing_ids": outgoing_ids,
+        "blocked_keys": blocked_keys,
+        "incoming_messages": _sort_messages(incoming_messages),
+        "outgoing_messages": _sort_messages(outgoing_messages),
+        "blocked_messages": _sort_messages(blocked_messages),
+    }
+
+
+def _collect_blocked_messages(window_minutes: int, now: datetime, cutoff: datetime) -> list[dict[str, Any]]:
+    return _parse_window_transit(window_minutes, now, cutoff)["blocked_messages"]
 
 
 def _collect_incoming_messages(window_minutes: int, now: datetime, cutoff: datetime) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for line in _tail_lines(LOGS_DIR / "postfix.log"):
-        if not _in_window(line, now, cutoff):
-            continue
-        incoming = POSTFIX_INCOMING.search(line)
-        if not incoming:
-            continue
-        qid = incoming.group("qid")
-        if qid in seen:
-            continue
-        seen.add(qid)
-        ts = _line_ts(line, now)
-        client = POSTFIX_CLIENT.search(line)
-        messages.append(
-            {
-                "timestamp": ts.isoformat() if ts else None,
-                "source": "postfix",
-                "queue_id": qid,
-                "from": "",
-                "to": [],
-                "client": client.group("client").strip() if client else "",
-                "summary": line.strip()[-240:],
-            }
-        )
-    messages.sort(key=lambda row: row.get("timestamp") or "", reverse=True)
-    return messages
+    return _parse_window_transit(window_minutes, now, cutoff)["incoming_messages"]
 
 
 def _collect_outgoing_messages(window_minutes: int, now: datetime, cutoff: datetime) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
-    for line in _tail_lines(LOGS_DIR / "postfix.log"):
-        if not _in_window(line, now, cutoff):
-            continue
-        sent = POSTFIX_SENT.search(line)
-        if not sent or not _is_outgoing_relay(sent.group("detail")):
-            continue
-        ts = _line_ts(line, now)
-        from_match = POSTFIX_FROM.search(line)
-        to_match = POSTFIX_TO.search(line)
-        messages.append(
-            {
-                "timestamp": ts.isoformat() if ts else None,
-                "source": "postfix",
-                "queue_id": sent.group("qid"),
-                "from": from_match.group("from") if from_match else "",
-                "to": [to_match.group("to")] if to_match else [],
-                "reason": sent.group("detail").strip(),
-                "summary": line.strip()[-240:],
-            }
-        )
-    messages.sort(key=lambda row: row.get("timestamp") or "", reverse=True)
-    return messages
+    return _parse_window_transit(window_minutes, now, cutoff)["outgoing_messages"]
 
 
 QUEUE_TYPE_LABELS = {
@@ -392,13 +429,10 @@ def collect_queue_listing(queue_type: str = "active", window_minutes: int = 60) 
     now = _now()
     cutoff = now - timedelta(minutes=window_minutes)
 
-    _, queue_detail, queue_ok, queue_messages = _read_queue_snapshot()
-    updated_at = None
-    if QUEUE_SNAPSHOT.is_file():
-        try:
-            updated_at = json.loads(QUEUE_SNAPSHOT.read_text(encoding="utf-8")).get("updated_at")
-        except (OSError, json.JSONDecodeError):
-            updated_at = None
+    snapshot = read_queue_snapshot()
+    queue_messages = snapshot["messages"]
+    queue_ok = snapshot["source_available"]
+    updated_at = snapshot.get("updated_at")
 
     if queue_type in {"active", "deferred", "hold"}:
         messages = _enrich_queue_messages(queue_messages.get(queue_type, []), now)
@@ -429,8 +463,10 @@ def collect_queue_listing(queue_type: str = "active", window_minutes: int = 60) 
             "messages": combined,
         }
 
+    transit = _parse_window_transit(window_minutes, now, cutoff)
+
     if queue_type == "blocked":
-        messages = _collect_blocked_messages(window_minutes, now, cutoff)
+        messages = transit["blocked_messages"]
         return {
             "type": "blocked",
             "label": QUEUE_TYPE_LABELS["blocked"],
@@ -444,7 +480,7 @@ def collect_queue_listing(queue_type: str = "active", window_minutes: int = 60) 
         }
 
     if queue_type == "incoming":
-        messages = _collect_incoming_messages(window_minutes, now, cutoff)
+        messages = transit["incoming_messages"]
         return {
             "type": "incoming",
             "label": QUEUE_TYPE_LABELS["incoming"],
@@ -457,7 +493,7 @@ def collect_queue_listing(queue_type: str = "active", window_minutes: int = 60) 
         }
 
     if queue_type == "outgoing":
-        messages = _collect_outgoing_messages(window_minutes, now, cutoff)
+        messages = transit["outgoing_messages"]
         return {
             "type": "outgoing",
             "label": QUEUE_TYPE_LABELS["outgoing"],
@@ -497,44 +533,31 @@ def collect_traffic_stats(window_minutes: int = 60) -> dict[str, Any]:
     postfix_log = LOGS_DIR / "postfix.log"
     amavis_log = LOGS_DIR / "amavis.log"
 
-    incoming_ids: set[str] = set()
-    outgoing_count = 0
-    postfix_blocked = 0
-
-    for line in _tail_lines(postfix_log):
-        if not _in_window(line, now, cutoff):
-            continue
-        incoming = POSTFIX_INCOMING.search(line)
-        if incoming:
-            incoming_ids.add(incoming.group("qid"))
-            continue
-        sent = POSTFIX_SENT.search(line)
-        if sent and _is_outgoing_relay(sent.group("detail")):
-            outgoing_count += 1
-            continue
-        if POSTFIX_BLOCKED.search(line):
-            postfix_blocked += 1
-
-    amavis_blocked = 0
-    for line in _tail_lines(amavis_log):
-        if not _in_window(line, now, cutoff):
-            continue
-        if AMAVIS_BLOCKED.search(line):
-            amavis_blocked += 1
-
-    in_coda, queue_detail, queue_ok, _queue_messages = _read_queue_snapshot()
+    transit = _parse_window_transit(window_minutes, now, cutoff)
+    snapshot = read_queue_snapshot()
+    queue_detail = {
+        "active": snapshot["active"],
+        "deferred": snapshot["deferred"],
+        "hold": snapshot["hold"],
+    }
 
     return {
         "window_minutes": window_minutes,
         "collected_at": now.isoformat(),
-        "ingresso": len(incoming_ids),
-        "in_coda": in_coda,
-        "bloccate": postfix_blocked + amavis_blocked,
-        "in_uscita": outgoing_count,
+        "ingresso": len(transit["incoming_ids"]),
+        "in_coda": snapshot["active"],
+        "bloccate": len(transit["blocked_keys"]),
+        "in_uscita": len(transit["outgoing_ids"]),
+        "metric_scope": {
+            "ingresso": "window",
+            "in_coda": "live",
+            "bloccate": "window",
+            "in_uscita": "window",
+        },
         "sources": {
             "postfix_log": postfix_log.is_file(),
             "amavis_log": amavis_log.is_file(),
-            "queue_snapshot": queue_ok,
+            "queue_snapshot": snapshot["source_available"],
         },
         "queue_detail": queue_detail,
     }
