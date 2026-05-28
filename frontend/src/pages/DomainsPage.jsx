@@ -430,7 +430,6 @@ export default function DomainsPage({
               const relaySourceDirty =
                 relaySourceDrafts[item.id] !== undefined &&
                 relaySourceDraft.trim() !== (item.relay_source_ips || []).join("\n");
-              const canRelayAll = destinations.length > 0 && item.enabled;
               const settingsTab = settingsTabFor(item.id);
               return (
                 <div key={item.id} className="domain-tab-panel">
@@ -479,12 +478,20 @@ export default function DomainsPage({
                           id={`relay-all-${item.id}`}
                           label="Inoltra tutta la posta in ingresso al server destinazione"
                           hint={
-                            canRelayAll
-                              ? "Qualsiasi indirizzo @dominio viene instradato al primo server di destinazione configurato, anche senza casella esplicita."
-                              : "Aggiungi almeno un server di destinazione e abilita il dominio per attivare l'inoltro catch-all."
+                            relayAllInbound
+                              ? "Tutta la posta in ingresso per @dominio viene instradata all'unico server di destinazione, senza caselle esplicite."
+                              : destinations.length === 1
+                                ? "Qualsiasi indirizzo @dominio viene instradato all'unico server di destinazione configurato, anche senza casella esplicita."
+                                : destinations.length === 0
+                                  ? "Aggiungi esattamente un server di destinazione e abilita il dominio per attivare l'inoltro catch-all."
+                                  : "Rimuovi i server extra: con l'inoltro catch-all è consentito un solo server destinazione."
                           }
                           checked={relayAllInbound}
-                          disabled={!canRelayAll || relayBusyItem}
+                          disabled={
+                            relayBusyItem ||
+                            (!relayAllInbound &&
+                              (destinations.length !== 1 || !item.enabled))
+                          }
                           onChange={(checked) => saveRelayAllInbound(item.id, checked)}
                         />
                         {relayAllInbound && destinations.length === 0 ? (
@@ -561,8 +568,16 @@ export default function DomainsPage({
                     <div className="domain-settings-panel domain-destinations">
                       <h4 className="domain-destinations__title">Server di destinazione</h4>
                       <p className="panel-hint">
-                        Elenco usato nel menu a tendina quando configuri le caselle di questo dominio.
+                        {relayAllInbound
+                          ? "Con l'inoltro catch-all attivo è consentito un solo server di destinazione."
+                          : "Elenco usato nel menu a tendina quando configuri le caselle di questo dominio."}
                       </p>
+                      {relayAllInbound && destinations.length > 1 ? (
+                        <p className="panel-hint panel-hint--warn" role="alert">
+                          Sono configurati più server destinazione: rimuovi quelli in eccesso per
+                          rispettare il vincolo dell&apos;inoltro catch-all.
+                        </p>
+                      ) : null}
                       {destinations.length === 0 ? (
                         <p className="empty-state">Nessun server configurato.</p>
                       ) : (
@@ -670,6 +685,7 @@ export default function DomainsPage({
                           })}
                         </ul>
                       )}
+                      {!(relayAllInbound && destinations.length >= 1) ? (
                       <form
                         onSubmit={(e) => addDestination(e, item.id)}
                         className="form-grid form-grid--inline form-grid--inline-dest"
@@ -714,6 +730,7 @@ export default function DomainsPage({
                           </button>
                         </div>
                       </form>
+                      ) : null}
                     </div>
                   )}
 

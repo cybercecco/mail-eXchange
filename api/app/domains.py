@@ -93,6 +93,43 @@ def get_domain(domain_id: int) -> sqlite3.Row:
     return row
 
 
+def count_domain_destinations(domain_id: int) -> int:
+    with db() as conn:
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM domain_destinations WHERE domain_id = ?",
+                (domain_id,),
+            ).fetchone()["c"]
+        )
+
+
+def relay_all_inbound_enabled(domain_id: int) -> bool:
+    return bool(int(get_domain(domain_id)["relay_all_inbound"]))
+
+
+def assert_relay_all_inbound_can_enable(domain_id: int) -> None:
+    destination_count = count_domain_destinations(domain_id)
+    if destination_count > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Remove extra destination servers before enabling relay-all-inbound "
+                "(only one destination is allowed)"
+            ),
+        )
+
+
+def assert_mailboxes_allowed(domain_id: int) -> None:
+    if relay_all_inbound_enabled(domain_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Mailbox add/import/edit is disabled while relay-all-inbound is "
+                "enabled for this domain"
+            ),
+        )
+
+
 def list_domains() -> list[dict]:
     from app.domain_destinations import list_all_destinations_by_domain
 
@@ -179,6 +216,8 @@ def update_domain(domain_id: int, payload: DomainUpdate) -> dict:
         if payload.relay_all_inbound is not None
         else int(row["relay_all_inbound"])
     )
+    if relay_all_inbound:
+        assert_relay_all_inbound_can_enable(domain_id)
     if "relay_source_ips" in payload.model_fields_set:
         relay_ips = normalize_relay_source_ips(payload.relay_source_ips)
         relay_ips_db = relay_source_ips_to_db(relay_ips)

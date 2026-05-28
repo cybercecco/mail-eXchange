@@ -8,7 +8,7 @@ from app.domain_destinations import (
     resolve_destination_by_label,
     resolve_destination_for_mailbox,
 )
-from app.domains import resolve_domain_for_mailbox
+from app.domains import assert_mailboxes_allowed, resolve_domain_for_mailbox
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -280,6 +280,17 @@ def import_mailboxes_csv(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    relay_blocked_domains: set[int] = set()
+    for row in parsed:
+        try:
+            domain_id, _ = resolve_domain_for_mailbox(row["email"], None)
+        except HTTPException:
+            continue
+        if domain_id in relay_blocked_domains:
+            continue
+        relay_blocked_domains.add(domain_id)
+        assert_mailboxes_allowed(domain_id)
+
     created = 0
     updated = 0
     skipped = 0
@@ -292,6 +303,7 @@ def import_mailboxes_csv(
             email = row["email"]
             try:
                 domain_id, _ = resolve_domain_for_mailbox(email, None)
+                assert_mailboxes_allowed(domain_id)
                 destination_host, destination_port = _resolve_row_destination(
                     domain_id, row
                 )

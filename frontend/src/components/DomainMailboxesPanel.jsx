@@ -33,6 +33,8 @@ export default function DomainMailboxesPanel({
 
   const domainDestinations = domain?.destinations || [];
   const domainEnabled = !!domain?.enabled;
+  const relayAllInbound = !!domain?.relay_all_inbound;
+  const mailboxesLocked = relayAllInbound;
 
   useEffect(() => {
     if (!domain) return;
@@ -72,18 +74,21 @@ export default function DomainMailboxesPanel({
         <div>
           <h4 className="domain-destinations__title">Caselle di {domain.name}</h4>
           <p className="panel-hint">
-            Indirizzi e routing SMTP per questo dominio. I server di destinazione si configurano
-            nel sotto-tab Destinazioni.
+            {mailboxesLocked
+              ? "Con l'inoltro catch-all attivo le caselle non sono utilizzate: tutta la posta in ingresso va al server destinazione."
+              : "Indirizzi e routing SMTP per questo dominio. I server di destinazione si configurano nel sotto-tab Destinazioni."}
           </p>
         </div>
-        <button
-          type="button"
-          className="btn-secondary btn-sm"
-          onClick={() => setImportOpen(true)}
-          disabled={!domainEnabled || enabledDomains.length === 0}
-        >
-          Importa CSV
-        </button>
+        {!mailboxesLocked ? (
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => setImportOpen(true)}
+            disabled={!domainEnabled || enabledDomains.length === 0}
+          >
+            Importa CSV
+          </button>
+        ) : null}
       </div>
 
       <EditMailboxModal
@@ -119,6 +124,7 @@ export default function DomainMailboxesPanel({
         onImportCsv={onImportCsv}
       />
 
+      {!mailboxesLocked ? (
       <form
         onSubmit={onAddMailbox}
         className="form-grid form-grid--inline form-grid--inline-mailbox domain-mailboxes__add-form"
@@ -179,8 +185,14 @@ export default function DomainMailboxesPanel({
           </button>
         </div>
       </form>
+      ) : (
+        <p className="panel-hint panel-hint--warn" role="alert">
+          Aggiunta, modifica e import caselle disabilitate mentre l&apos;inoltro catch-all è attivo
+          nel sotto-tab Generale.
+        </p>
+      )}
 
-      {!domainEnabled ? (
+      {!domainEnabled && !mailboxesLocked ? (
         <p className="panel-hint panel-hint--warn" role="alert">
           Il dominio è disabilitato: abilitalo nel sotto-tab Generale per aggiungere caselle.
         </p>
@@ -218,20 +230,32 @@ export default function DomainMailboxesPanel({
                   </span>
                 </div>
                 <div className="list-item-actions">
-                  <button
-                    type="button"
-                    className="btn-secondary btn-sm"
-                    onClick={() => setEditingMailbox(item)}
-                  >
-                    Modifica
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-danger btn-sm"
-                    onClick={() => onDeleteMailbox(item.id)}
-                  >
-                    Elimina
-                  </button>
+                  {!mailboxesLocked ? (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        onClick={() => setEditingMailbox(item)}
+                      >
+                        Modifica
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-danger btn-sm"
+                        onClick={() => onDeleteMailbox(item.id)}
+                      >
+                        Elimina
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn-danger btn-sm"
+                      onClick={() => onDeleteMailbox(item.id)}
+                    >
+                      Elimina
+                    </button>
+                  )}
                 </div>
               </li>
             ))}

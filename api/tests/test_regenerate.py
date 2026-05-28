@@ -18,6 +18,8 @@ class RegenerateCatchAllTest(unittest.TestCase):
             patch.object(db_module, "DB_PATH", self.db_path),
             patch.object(db_module, "GENERATED_DIR", self.generated_dir),
             patch("app.regenerate.GENERATED_DIR", self.generated_dir),
+            patch("app.regenerate.OPENDKIM_DIR", self.generated_dir / "opendkim"),
+            patch("app.regenerate.DKIM_PUB_DIR", self.generated_dir / "dkim"),
             patch("app.regenerate.write_caddyfile"),
             patch("app.regenerate.write_docker_dns_compose_override"),
         ]
@@ -59,6 +61,33 @@ class RegenerateCatchAllTest(unittest.TestCase):
             )
         conn.commit()
         return domain_id
+
+    def test_catch_all_uses_sole_destination_when_multiple_exist(self) -> None:
+        with db_module.db() as conn:
+            domain_id = self._insert_domain(
+                conn,
+                "multi.example",
+                relay_all_inbound=True,
+                destination=("first.backend", 2525),
+            )
+            conn.execute(
+                """
+                INSERT INTO domain_destinations (domain_id, label, host, port)
+                VALUES (?, 'Second', 'second.backend', 26)
+                """,
+                (domain_id,),
+            )
+            conn.commit()
+
+        with self.assertLogs("app.regenerate", level="WARNING") as logs:
+            regenerate_files()
+
+        transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
+        self.assertIn("@multi.example smtp:[first.backend]:2525", transport)
+        self.assertNotIn("@multi.example smtp:[second.backend]:26", transport)
+        self.assertTrue(
+            any("2 destinations configured" in message for message in logs.output)
+        )
 
     def test_catch_all_generates_transport_and_regexp_maps(self) -> None:
         with db_module.db() as conn:

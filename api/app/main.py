@@ -56,6 +56,7 @@ from app.domains import (
     delete_domain,
     get_domain,
     list_domains,
+    assert_mailboxes_allowed,
     resolve_domain_for_mailbox,
     update_domain,
 )
@@ -396,6 +397,7 @@ def create_mailbox(payload: MailboxCreate, _user: CurrentUser) -> dict:
 
     email = payload.email.lower()
     domain_id, _ = resolve_domain_for_mailbox(email, payload.domain_id)
+    assert_mailboxes_allowed(domain_id)
     resolve_destination_for_mailbox(
         domain_id, payload.destination_host, payload.destination_port
     )
@@ -464,9 +466,11 @@ def update_mailbox(mailbox_id: int, payload: MailboxUpdate, _user: CurrentUser) 
         email = row["email"]
         domain_id = row["domain_id"]
         previous_domain_id = domain_id
+        assert_mailboxes_allowed(domain_id)
         if payload.email is not None:
             email = payload.email.strip().lower()
             domain_id, _ = resolve_domain_for_mailbox(email, None)
+            assert_mailboxes_allowed(domain_id)
         destination_host = payload.destination_host or row["destination_host"]
         destination_port = payload.destination_port or row["destination_port"]
         resolve_destination_for_mailbox(domain_id, destination_host, destination_port)

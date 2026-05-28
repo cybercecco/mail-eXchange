@@ -3,7 +3,7 @@ import sqlite3
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
-from app.domains import get_domain
+from app.domains import get_domain, relay_all_inbound_enabled
 from app.db import db
 from app.sync import touch_domain_updated_at
 
@@ -56,6 +56,20 @@ def list_all_destinations_by_domain() -> dict[int, list[dict]]:
 
 def create_destination(domain_id: int, payload: DestinationCreate) -> dict:
     get_domain(domain_id)
+    if relay_all_inbound_enabled(domain_id):
+        with db() as conn:
+            existing = conn.execute(
+                "SELECT COUNT(*) AS c FROM domain_destinations WHERE domain_id = ?",
+                (domain_id,),
+            ).fetchone()["c"]
+        if int(existing) >= 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Only one destination server is allowed while relay-all-inbound "
+                    "is enabled for this domain"
+                ),
+            )
     host = _normalize_host(payload.host)
     label = (payload.label or host).strip()
     with db() as conn:
