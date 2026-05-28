@@ -127,3 +127,40 @@ class SpamWhitelistGenerationTest(unittest.TestCase):
         local_cf = build_local_cf(settings)
         self.assertIn("whitelist_from trusted@partner.com", local_cf)
         self.assertIn("whitelist_from *@safe.example", local_cf)
+
+    def test_domain_shorthand_patterns_normalized(self) -> None:
+        from app.spamassassin import (
+            build_amavis_overrides,
+            build_local_cf,
+            normalize_settings,
+            normalize_whitelist_from,
+        )
+
+        self.assertEqual(normalize_whitelist_from("*amazon.com"), "*.amazon.com")
+        self.assertEqual(normalize_whitelist_from("amazon.com"), "*.amazon.com")
+        self.assertEqual(normalize_whitelist_from("@amazon.com"), "*@amazon.com")
+        self.assertEqual(normalize_whitelist_from("*@bounces.amazon.com"), "*@bounces.amazon.com")
+
+        settings = normalize_settings(
+            {
+                "whitelist_from": [
+                    "*amazon.com",
+                    "*@bounces.amazon.com",
+                    "*@partner.example",
+                ]
+            }
+        )
+        self.assertEqual(
+            settings["whitelist_from"],
+            ["*.amazon.com", "*@bounces.amazon.com", "*@partner.example"],
+        )
+
+        overrides = build_amavis_overrides(settings)
+        self.assertIn("'.amazon.com' => [-100]", overrides)
+        self.assertIn("'.bounces.amazon.com' => [-100]", overrides)
+        self.assertIn("'.partner.example' => [-100]", overrides)
+        self.assertNotIn("'*amazon.com'", overrides)
+
+        local_cf = build_local_cf(settings)
+        self.assertIn("whitelist_from *.amazon.com", local_cf)
+        self.assertIn("whitelist_from *@bounces.amazon.com", local_cf)

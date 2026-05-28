@@ -284,16 +284,25 @@ export default function SpamPage({ onError }) {
             <div className="panel spam-panel">
               <h3>Mittenti consentiti e negati</h3>
               <p className="panel-hint">
-                Indirizzi <code>From:</code> da non classificare mai come spam, o sempre come spam.
-                Supporta wildcard: <code>*@dominio.it</code>, <code>*.dominio.it</code>.
-                La whitelist viene applicata in SpamAssassin e in Amavis (`@score_sender_maps`, punteggio -100).
+                Queste regole valgono per il <strong>mittente</strong> del messaggio (
+                <code>MAIL FROM</code> / intestazione <code>From:</code>), <em>non</em> per il
+                dominio del destinatario. Per accettare tutta la posta verso un dominio locale
+                (catch-all) usa <strong>Relay tutta la posta in ingresso</strong> nella pagina
+                Domini.
+              </p>
+              <p className="panel-hint">
+                Supporta wildcard in stile SpamAssassin: <code>*@dominio.it</code> (solo quel
+                dominio), <code>*.dominio.it</code> o <code>*dominio.it</code> (dominio e
+                sottodomini), <code>utente@dominio.it</code> (indirizzo esatto). La whitelist
+                viene applicata in SpamAssassin e in Amavis (<code>@score_sender_maps</code>,
+                punteggio -100).
               </p>
               <FormField label="Mittenti da non classificare mai come spam (whitelist_from)">
                 <textarea
                   rows={6}
                   value={whitelistText}
                   onChange={(e) => setWhitelistText(e.target.value)}
-                  placeholder="noreply@dominio.it&#10;*@partner.example"
+                  placeholder="noreply@dominio.it&#10;*@partner.example&#10;*.amazon.com"
                 />
               </FormField>
               <FormField label="Mittenti da classificare sempre come spam (blacklist_from)">
@@ -462,8 +471,8 @@ export default function SpamPage({ onError }) {
           {saved && <span className="spam-saved">Configurazione salvata e file rigenerati.</span>}
           <p className="panel-hint" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
             Dopo il salvataggio, Postfix/Amavis ricaricano i file generati in{" "}
-            <code>/data/generated/</code>. Per applicare subito le regole SpamAssassin può essere
-            necessario riavviare il container <code>amavis</code>.
+            <code>/data/generated/</code>. Amavis esegue <code>reload</code> automaticamente entro
+            ~15 secondi quando cambiano le regole spam.
           </p>
         </div>
       </form>
