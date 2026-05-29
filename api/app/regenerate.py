@@ -5,6 +5,12 @@ import re
 from pathlib import Path
 
 from app.db import DATA_DIR, GENERATED_DIR, db
+from app.mail_config import (
+    AMAVIS_SPAM_OVERRIDES,
+    POSTFIX_GENERATED_DIR,
+    SPAMASSASSIN_LOCAL_CF,
+    ensure_mail_config_dirs,
+)
 from app.relay_ips import relay_client_access_filename, relay_source_ips_from_db
 from app.spamassassin import build_amavis_overrides, build_local_cf
 from app.system_settings import POSTFIX_HOSTNAME, get_settings, write_docker_dns_compose_override
@@ -87,6 +93,7 @@ def admin_notify_emails(conn) -> list[str]:
 
 def regenerate_files() -> None:
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_mail_config_dirs()
     OPENDKIM_DIR.mkdir(parents=True, exist_ok=True)
     DKIM_PUB_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -215,29 +222,29 @@ def regenerate_files() -> None:
         transport_maps_lines.append(f"{name} {transport_route}")
         transport_catchall_lines.append(f"/^.+@{escaped_domain}$/ {transport_route}")
 
-    (GENERATED_DIR / "virtual_mailbox_maps").write_text(
+    (POSTFIX_GENERATED_DIR / "virtual_mailbox_maps").write_text(
         "\n".join(virtual_mailbox_maps_lines)
         + ("\n" if virtual_mailbox_maps_lines else ""),
         encoding="utf-8",
     )
-    (GENERATED_DIR / "transport_maps").write_text(
+    (POSTFIX_GENERATED_DIR / "transport_maps").write_text(
         "\n".join(transport_maps_lines) + ("\n" if transport_maps_lines else ""),
         encoding="utf-8",
     )
-    (GENERATED_DIR / "virtual_alias_domains").write_text(
+    (POSTFIX_GENERATED_DIR / "virtual_alias_domains").write_text(
         "\n".join(virtual_alias_lines) + ("\n" if virtual_alias_lines else ""),
         encoding="utf-8",
     )
-    (GENERATED_DIR / "virtual_alias_maps").write_text(
+    (POSTFIX_GENERATED_DIR / "virtual_alias_maps").write_text(
         "\n".join(virtual_alias_maps_lines)
         + ("\n" if virtual_alias_maps_lines else ""),
         encoding="utf-8",
     )
-    (GENERATED_DIR / "virtual_mailbox_catchall").write_text(
+    (POSTFIX_GENERATED_DIR / "virtual_mailbox_catchall").write_text(
         "\n".join(virtual_mailbox_catchall_lines) + "\n",
         encoding="utf-8",
     )
-    (GENERATED_DIR / "transport_catchall").write_text(
+    (POSTFIX_GENERATED_DIR / "transport_catchall").write_text(
         "\n".join(transport_catchall_lines) + "\n",
         encoding="utf-8",
     )
@@ -255,7 +262,7 @@ def regenerate_files() -> None:
         if not relay_ips:
             continue
         cidr_filename = relay_client_access_filename(name)
-        cidr_path = GENERATED_DIR / cidr_filename
+        cidr_path = POSTFIX_GENERATED_DIR / cidr_filename
         cidr_lines = [f"{cidr}\tOK" for cidr in relay_ips]
         cidr_path.write_text("\n".join(cidr_lines) + "\n", encoding="utf-8")
         active_relay_cidr_files.add(cidr_filename)
@@ -263,11 +270,11 @@ def regenerate_files() -> None:
         relay_sender_access_lines.append(f"@{name}\tcheck_client_access {cidr_map_ref}")
         relay_sender_access_lines.append(f"{name}\tcheck_client_access {cidr_map_ref}")
 
-    for stale in GENERATED_DIR.glob("relay_client_access_*.cidr"):
+    for stale in POSTFIX_GENERATED_DIR.glob("relay_client_access_*.cidr"):
         if stale.name not in active_relay_cidr_files:
             stale.unlink(missing_ok=True)
 
-    (GENERATED_DIR / "relay_sender_access").write_text(
+    (POSTFIX_GENERATED_DIR / "relay_sender_access").write_text(
         "\n".join(relay_sender_access_lines) + "\n",
         encoding="utf-8",
     )
@@ -297,10 +304,8 @@ def regenerate_files() -> None:
         encoding="utf-8",
     )
 
-    (GENERATED_DIR / "spamassassin.local.cf").write_text(
-        build_local_cf(spam_settings), encoding="utf-8"
-    )
-    (GENERATED_DIR / "amavis-spam-overrides.conf").write_text(
+    SPAMASSASSIN_LOCAL_CF.write_text(build_local_cf(spam_settings), encoding="utf-8")
+    AMAVIS_SPAM_OVERRIDES.write_text(
         build_amavis_overrides(spam_settings), encoding="utf-8"
     )
     write_caddyfile()

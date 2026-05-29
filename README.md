@@ -91,9 +91,10 @@ Tutti i servizi custom sono orchestrati con **Docker Compose** sulla rete intern
 
 Per produzione multi-nodo tipico:
 
-1. Due (o più) server con stack identica; per ogni dominio in cluster, stessa **chiave precondivisa sync** e `sibling_fqdn` configurati nel tab **Cluster** su entrambi i nodi.
-2. Su dominio `example.com` su nodo A: `sibling_fqdn = mx2.example.com`.
-3. Su nodo B: configurazione speculare o lasciare vuoto se la sync è unidirezionale.
+1. Due (o più) server con stack identica; **ogni nodo può avere un insieme di domini diverso** — il cluster è **per dominio**, non globale.
+2. Per ogni dominio da replicare: sul nodo sorgente e sul peer, creare il dominio e configurare nel tab **Cluster** la stessa **chiave precondivisa sync** e `sibling_fqdn` (es. su nodo A per `example.com`: `sibling_fqdn = mx2.example.com`; su nodo B lo stesso dominio con `sibling_fqdn = mx1.example.com` se la sync è bidirezionale).
+3. Domini presenti solo su un nodo (es. `other.com` solo su B) non partecipano alla sync finché non vengono configurati esplicitamente.
+4. Sync unidirezionale: lasciare `sibling_fqdn` vuoto sul nodo che riceve solo.
 
 ---
 

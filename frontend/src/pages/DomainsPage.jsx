@@ -508,11 +508,13 @@ export default function DomainsPage({
                     <div className="domain-settings-panel domain-sibling">
                       <h4 className="domain-destinations__title">Server Cluster</h4>
                       <p className="panel-hint">
-                        FQDN dell&apos;altro nodo del cluster che riceve il bundle di sincronizzazione
-                        (caselle, selector/chiavi DKIM, suggerimenti MX) al salvataggio, ad ogni modifica
-                        caselle e quando cambiano selector o chiavi DKIM. Impostazioni locali come
-                        destinazioni e relay restano sul nodo. Lasciare vuoto per disabilitare la replica.
-                        La chiave precondivisa deve essere identica su entrambi i nodi per questo dominio.
+                        Configurazione cluster <strong>per questo dominio</strong>: ogni server può avere
+                        un insieme di domini diverso; la replica riguarda solo il dominio selezionato.
+                        FQDN dell&apos;altro nodo che riceve il bundle (caselle, selector/chiavi DKIM,
+                        suggerimenti MX) al salvataggio, ad ogni modifica caselle e quando cambiano selector
+                        o chiavi DKIM. Impostazioni locali come destinazioni e relay restano sul nodo.
+                        Lasciare vuoto per disabilitare la replica. Sul peer, creare lo stesso dominio con
+                        la stessa chiave precondivisa prima del primo push.
                       </p>
                       <form
                         className="form-grid form-grid--inline form-grid--inline-dest"

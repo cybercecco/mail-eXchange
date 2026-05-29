@@ -1,17 +1,27 @@
+# Config runtime Postfix/Amavis/SpamAssassin (host: ./config o /opt/mail-exchange/config)
+x-mail-config-volume: &mail-config-volume
+  ${MAIL_CONFIG_DIR:-./config}:/mail-exchange-config
+
 # DNS di default; sovrascritti da docker-dns.override.yml generato dalle impostazioni
 x-app-dns: &app-dns
   dns:
     - ${DOCKER_DNS_1:-208.67.222.222}
     - ${DOCKER_DNS_2:-208.67.220.220}
 
+x-app-tz: &app-tz
+  environment:
+    TZ: Europe/Rome
+
 services:
   api:
-    <<: *app-dns
+    <<: [*app-dns, *app-tz]
     image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-api:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-api
     environment:
+      - TZ=Europe/Rome
       - API_PORT=8000
       - DATA_DIR=/data
+      - MAIL_CONFIG_DIR=/mail-exchange-config
       - MAIL_DOMAIN=${MAIL_DOMAIN}
       - POSTFIX_HOSTNAME=${POSTFIX_HOSTNAME}
       - CADDY_DOMAIN=${CADDY_DOMAIN:-}
@@ -33,6 +43,7 @@ services:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       - mail-data:/data
+      - *mail-config-volume
       - dkim-keys:/etc/opendkim/keys
       # Riavvio servizi da pannello admin: socket Docker (ro) + CLI nel container api
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -43,7 +54,7 @@ services:
     restart: unless-stopped
 
   frontend:
-    <<: *app-dns
+    <<: [*app-dns, *app-tz]
     image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-frontend:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-frontend
     depends_on:
@@ -53,10 +64,11 @@ services:
     restart: unless-stopped
 
   caddy:
-    <<: *app-dns
+    <<: [*app-dns, *app-tz]
     image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-caddy:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-caddy
     environment:
+      - TZ=Europe/Rome
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     command: ["run", "--config", "/mail-exchange-data/generated/Caddyfile", "--adapter", "caddyfile"]
     ports:
@@ -73,10 +85,11 @@ services:
     restart: unless-stopped
 
   postfix:
-    <<: *app-dns
+    <<: [*app-dns, *app-tz]
     image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-postfix:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-postfix
     environment:
+      - TZ=Europe/Rome
       - MAIL_DOMAIN=${MAIL_DOMAIN}
       - MYHOSTNAME=${POSTFIX_HOSTNAME}
       - MYNETWORKS=${MYNETWORKS}
@@ -85,6 +98,7 @@ services:
       - "${SUBMISSION_PUBLISHED_PORT:-1587}:587"
     volumes:
       - mail-data:/data
+      - *mail-config-volume
       - postfix-spool:/var/spool/postfix
       # ACME certs from Caddy (read-only) for inbound smtpd STARTTLS
       - caddy-data:/caddy-data:ro
@@ -98,14 +112,16 @@ services:
     restart: unless-stopped
 
   amavis:
-    <<: *app-dns
+    <<: [*app-dns, *app-tz]
     image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-amavis:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-amavis
     environment:
+      - TZ=Europe/Rome
       - MAIL_DOMAIN=${MAIL_DOMAIN}
       - POSTFIX_HOSTNAME=${POSTFIX_HOSTNAME}
     volumes:
       - mail-data:/data
+      - *mail-config-volume
     depends_on:
       clamav:
         condition: service_healthy
@@ -114,9 +130,11 @@ services:
     restart: unless-stopped
 
   clamav:
-    <<: *app-dns
+    <<: [*app-dns, *app-tz]
     image: clamav/clamav:stable
     container_name: mx-clamav
+    environment:
+      - TZ=Europe/Rome
     healthcheck:
       test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
       interval: 30s
@@ -128,10 +146,11 @@ services:
     restart: unless-stopped
 
   opendkim:
-    <<: *app-dns
+    <<: [*app-dns, *app-tz]
     image: ${DOCKERHUB_NAMESPACE:-cybercecco}/mail-exchange-opendkim:${MAIL_EXCHANGE_IMAGE_TAG:-latest}
     container_name: mx-opendkim
     environment:
+      - TZ=Europe/Rome
       - MAIL_DOMAIN=${MAIL_DOMAIN}
       - DKIM_SELECTOR=${DKIM_SELECTOR}
     volumes:

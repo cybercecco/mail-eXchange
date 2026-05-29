@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+MAIL_CFG="${MAIL_CONFIG_DIR:-/mail-exchange-config}"
+LOCAL_DOMAINS_FILE="${MAIL_CFG}/postfix/generated/virtual_alias_domains"
+AMAVIS_LOCAL_DOMAINS="${MAIL_CFG}/amavis/local-domains.conf"
+
 mkdir -p /etc/spamassassin
-mkdir -p /data/generated
+mkdir -p "${MAIL_CFG}/amavis" "${MAIL_CFG}/spamassassin" "${MAIL_CFG}/postfix/generated"
 mkdir -p /data/logs
 mkdir -p /data/quarantine/incoming/spam
 mkdir -p /data/quarantine/incoming/virus
@@ -15,13 +19,27 @@ if [[ ! -f /etc/mailname ]]; then
   echo "${MAIL_DOMAIN:-localhost.localdomain}" > /etc/mailname
 fi
 
-touch /data/generated/spamassassin.local.cf
-touch /data/generated/amavis-spam-overrides.conf
-ln -sf /data/generated/spamassassin.local.cf /etc/spamassassin/local.cf
-ln -sf /data/generated/amavis-spam-overrides.conf /etc/amavis/spam-overrides.conf
+ensure_amavis_config() {
+  mkdir -p /etc/amavis/conf.d "${MAIL_CFG}/amavis/conf.d"
+  if [[ -f "${MAIL_CFG}/amavis/conf.d/50-user" ]]; then
+    cp -f "${MAIL_CFG}/amavis/conf.d/50-user" /etc/amavis/conf.d/50-user
+  elif [[ ! -f /etc/amavis/conf.d/50-user && -f /usr/share/mail-exchange/amavis/50-user ]]; then
+    cp /usr/share/mail-exchange/amavis/50-user /etc/amavis/conf.d/50-user
+  fi
+  if [[ -f "${MAIL_CFG}/amavis/conf.d/52-clamav-scanner" ]]; then
+    cp -f "${MAIL_CFG}/amavis/conf.d/52-clamav-scanner" /etc/amavis/conf.d/52-clamav-scanner
+  elif [[ ! -f /etc/amavis/conf.d/52-clamav-scanner && -f /usr/share/mail-exchange/amavis/52-clamav-scanner ]]; then
+    cp /usr/share/mail-exchange/amavis/52-clamav-scanner /etc/amavis/conf.d/52-clamav-scanner
+  fi
+}
 
-LOCAL_DOMAINS_FILE="/data/generated/virtual_alias_domains"
-AMAVIS_DOMAINS="/etc/amavis/local-domains.conf"
+ensure_amavis_config
+
+touch "${MAIL_CFG}/spamassassin/local.cf"
+touch "${MAIL_CFG}/amavis/spam-overrides.conf"
+ln -sf "${MAIL_CFG}/spamassassin/local.cf" /etc/spamassassin/local.cf
+ln -sf "${MAIL_CFG}/amavis/spam-overrides.conf" /etc/amavis/spam-overrides.conf
+ln -sf "${AMAVIS_LOCAL_DOMAINS}" /etc/amavis/local-domains.conf
 
 build_local_domains() {
   local domains=()
@@ -42,7 +60,7 @@ build_local_domains() {
       echo "  $(IFS=,; echo "${domains[*]}"),"
     fi
     echo "] );"
-  } > "${AMAVIS_DOMAINS}"
+  } > "${AMAVIS_LOCAL_DOMAINS}"
 }
 
 build_local_domains
@@ -76,19 +94,6 @@ wait_for_clamav() {
 
 wait_for_clamav
 
-CLAMAV_HOST="${CLAMAV_HOST:-clamav}"
-CLAMAV_PORT="${CLAMAV_PORT:-3310}"
-cat > /etc/amavis/conf.d/52-clamav-scanner <<EOF
-# Remote ClamAV (mx-clamav): INSTREAM over TCP, not local clamd.ctl CONTSCAN.
-@av_scanners = (
-  ['ClamAV-clamd',
-    \\&ask_daemon, ["*", "clamd:[${CLAMAV_HOST}]:${CLAMAV_PORT}"],
-    qr/\\bOK\$/m, qr/\\bFOUND\$/m,
-    qr/^.*?: (?!Infected Archive)(.*) FOUND\$/m ],
-);
-@av_scanners_backup = ();
-EOF
-
 if [[ -n "${POSTFIX_HOSTNAME:-}" ]]; then
   cat > /etc/amavis/conf.d/51-hostname <<EOF
 \$myhostname = '${POSTFIX_HOSTNAME}';
@@ -117,8 +122,8 @@ watch_spam_config() {
   local initialized=0
   while true; do
     local files=(
-      /data/generated/spamassassin.local.cf
-      /data/generated/amavis-spam-overrides.conf
+      "${MAIL_CFG}/spamassassin/local.cf"
+      "${MAIL_CFG}/amavis/spam-overrides.conf"
     )
     local current_sum=""
     current_sum="$(sha256sum "${files[@]}" 2>/dev/null | sha256sum | awk '{print $1}')"

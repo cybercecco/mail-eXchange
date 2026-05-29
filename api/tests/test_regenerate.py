@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import db as db_module
+from app import mail_config as mail_config_module
 from app.regenerate import regenerate_files
 
 
@@ -12,12 +13,29 @@ class RegenerateCatchAllTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         data_dir = Path(self.tmp.name)
         self.generated_dir = data_dir / "generated"
+        mail_cfg = data_dir / "mail-config"
+        self.postfix_generated = mail_cfg / "postfix" / "generated"
         self.db_path = data_dir / "mailrouter.db"
         self.patches = [
             patch.object(db_module, "DATA_DIR", data_dir),
             patch.object(db_module, "DB_PATH", self.db_path),
             patch.object(db_module, "GENERATED_DIR", self.generated_dir),
+            patch.object(mail_config_module, "MAIL_CONFIG_DIR", mail_cfg),
+            patch.object(mail_config_module, "POSTFIX_GENERATED_DIR", self.postfix_generated),
+            patch.object(
+                mail_config_module,
+                "SPAMASSASSIN_LOCAL_CF",
+                mail_cfg / "spamassassin" / "local.cf",
+            ),
+            patch.object(
+                mail_config_module,
+                "AMAVIS_SPAM_OVERRIDES",
+                mail_cfg / "amavis" / "spam-overrides.conf",
+            ),
             patch("app.regenerate.GENERATED_DIR", self.generated_dir),
+            patch("app.regenerate.POSTFIX_GENERATED_DIR", self.postfix_generated),
+            patch("app.regenerate.SPAMASSASSIN_LOCAL_CF", mail_cfg / "spamassassin" / "local.cf"),
+            patch("app.regenerate.AMAVIS_SPAM_OVERRIDES", mail_cfg / "amavis" / "spam-overrides.conf"),
             patch("app.regenerate.OPENDKIM_DIR", self.generated_dir / "opendkim"),
             patch("app.regenerate.DKIM_PUB_DIR", self.generated_dir / "dkim"),
             patch("app.regenerate.write_caddyfile"),
@@ -82,7 +100,7 @@ class RegenerateCatchAllTest(unittest.TestCase):
         with self.assertLogs("app.regenerate", level="WARNING") as logs:
             regenerate_files()
 
-        transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
+        transport = (self.postfix_generated / "transport_maps").read_text(encoding="utf-8")
         self.assertIn("multi.example smtp:[first.backend]:2525", transport)
         self.assertNotIn("multi.example smtp:[second.backend]:26", transport)
         self.assertTrue(
@@ -102,19 +120,19 @@ class RegenerateCatchAllTest(unittest.TestCase):
         regenerate_files()
 
         mailbox_maps = (
-            self.generated_dir / "virtual_mailbox_maps"
+            self.postfix_generated / "virtual_mailbox_maps"
         ).read_text(encoding="utf-8")
         alias_domains = (
-            self.generated_dir / "virtual_alias_domains"
+            self.postfix_generated / "virtual_alias_domains"
         ).read_text(encoding="utf-8")
-        transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
+        transport = (self.postfix_generated / "transport_maps").read_text(encoding="utf-8")
 
         self.assertIn("iot.relay.example OK", alias_domains)
         self.assertIn("@iot.relay.example OK", mailbox_maps)
         self.assertIn("iot.relay.example smtp:[relay.backend]:2525", transport)
         self.assertNotIn("\n@iot.relay.example smtp:", transport)
         catchall_transport = (
-            self.generated_dir / "transport_catchall"
+            self.postfix_generated / "transport_catchall"
         ).read_text(encoding="utf-8")
         self.assertIn("/^.+@iot\\.relay\\.example$/ smtp:[relay.backend]:2525", catchall_transport)
 
@@ -137,14 +155,14 @@ class RegenerateCatchAllTest(unittest.TestCase):
 
         regenerate_files()
 
-        transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
+        transport = (self.postfix_generated / "transport_maps").read_text(encoding="utf-8")
         mailbox_maps = (
-            self.generated_dir / "virtual_mailbox_maps"
+            self.postfix_generated / "virtual_mailbox_maps"
         ).read_text(encoding="utf-8")
         alias_domains = (
-            self.generated_dir / "virtual_alias_domains"
+            self.postfix_generated / "virtual_alias_domains"
         ).read_text(encoding="utf-8")
-        catchall = (self.generated_dir / "virtual_mailbox_catchall").read_text(encoding="utf-8")
+        catchall = (self.postfix_generated / "virtual_mailbox_catchall").read_text(encoding="utf-8")
 
         self.assertIn("catchall.example smtp:[relay.backend]:2525", transport)
         self.assertIn("known@catchall.example smtp:[other.backend]:25", transport)
@@ -163,8 +181,8 @@ class RegenerateCatchAllTest(unittest.TestCase):
 
         regenerate_files()
 
-        transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
-        catchall = (self.generated_dir / "virtual_mailbox_catchall").read_text(encoding="utf-8")
+        transport = (self.postfix_generated / "transport_maps").read_text(encoding="utf-8")
+        catchall = (self.postfix_generated / "virtual_mailbox_catchall").read_text(encoding="utf-8")
 
         self.assertNotIn("@node.st.example", transport)
         self.assertNotIn("node.st.example", catchall)
@@ -181,8 +199,8 @@ class RegenerateCatchAllTest(unittest.TestCase):
 
         regenerate_files()
 
-        transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
-        catchall = (self.generated_dir / "virtual_mailbox_catchall").read_text(encoding="utf-8")
+        transport = (self.postfix_generated / "transport_maps").read_text(encoding="utf-8")
+        catchall = (self.postfix_generated / "virtual_mailbox_catchall").read_text(encoding="utf-8")
 
         self.assertNotIn("@off.example", transport)
         self.assertNotIn("off.example", catchall)
@@ -197,9 +215,9 @@ class RegenerateCatchAllTest(unittest.TestCase):
 
         regenerate_files()
 
-        sender_map = (self.generated_dir / "relay_sender_access").read_text(encoding="utf-8")
+        sender_map = (self.postfix_generated / "relay_sender_access").read_text(encoding="utf-8")
         cidr_map = (
-            self.generated_dir / "relay_client_access_relay_example.cidr"
+            self.postfix_generated / "relay_client_access_relay_example.cidr"
         ).read_text(encoding="utf-8")
 
         self.assertIn("@relay.example\tcheck_client_access cidr:", sender_map)
@@ -216,7 +234,7 @@ class RegenerateCatchAllTest(unittest.TestCase):
             )
 
         regenerate_files()
-        stale = self.generated_dir / "relay_client_access_gone_example.cidr"
+        stale = self.postfix_generated / "relay_client_access_gone_example.cidr"
         self.assertTrue(stale.exists())
 
         with db_module.db() as conn:

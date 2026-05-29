@@ -11,10 +11,12 @@ from app.sync import (
     SYNC_HTTPS_PORT,
     SyncDomainBundlePayload,
     apply_incoming_domain_sync,
+    attach_sync_warning,
     build_domain_sync_payload,
     build_mailbox_sync_payload,
     is_self_sync_target,
     merge_mx_hints,
+    push_to_sibling,
     verify_sync_auth,
 )
 from app.sync import SyncMailboxesPayload
@@ -330,6 +332,86 @@ class SyncPayloadTest(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             verify_sync_auth("example.com", "Bearer wrong")
         self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_push_skipped_without_sibling_even_without_sync_secret(self) -> None:
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO domains (name, enabled, dkim_selector, sibling_fqdn, sync_secret)
+                VALUES ('local-only.com', 1, 'mail', NULL, NULL)
+                """,
+            )
+            domain_id = conn.execute(
+                "SELECT id FROM domains WHERE name = 'local-only.com'"
+            ).fetchone()["id"]
+            conn.commit()
+        self.assertIsNone(push_to_sibling(domain_id))
+        result = attach_sync_warning({"status": "ok"}, domain_id)
+        self.assertNotIn("sync_warning", result)
+
+    def test_per_domain_sync_secret_isolation(self) -> None:
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE domains SET sync_secret = 'secret-a' WHERE id = ?",
+                (self.domain_id,),
+            )
+            conn.execute(
+                """
+                INSERT INTO domains (name, enabled, dkim_selector, sibling_fqdn, sync_secret)
+                VALUES ('other.com', 1, 'mail', 'mx2.example.com', 'secret-b')
+                """,
+            )
+            conn.commit()
+        verify_sync_auth("example.com", "Bearer secret-a")
+        verify_sync_auth("other.com", "Bearer secret-b")
+        with self.assertRaises(HTTPException) as ctx:
+            verify_sync_auth("other.com", "Bearer secret-a")
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_apply_incoming_does_not_touch_other_domains(self) -> None:
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO domains (name, enabled, dkim_selector, sibling_fqdn)
+                VALUES ('untouched.com', 1, 'mail', NULL)
+                """
+            )
+            untouched_id = conn.execute(
+                "SELECT id FROM domains WHERE name = 'untouched.com'"
+            ).fetchone()["id"]
+            conn.execute(
+                """
+                INSERT INTO mailboxes (email, destination_host, destination_port, enabled, domain_id)
+                VALUES ('keep@untouched.com', 'backend.example.com', 25, 1, ?)
+                """,
+                (untouched_id,),
+            )
+            conn.commit()
+
+        with patch("app.sync.regenerate_files"):
+            apply_incoming_domain_sync(
+                SyncDomainBundlePayload(
+                    domain_name="example.com",
+                    mailboxes=[
+                        {
+                            "email": "synced@example.com",
+                            "destination_host": "backend.example.com",
+                            "destination_port": 25,
+                            "enabled": True,
+                        }
+                    ],
+                )
+            )
+
+        with db_module.db() as conn:
+            untouched = conn.execute(
+                "SELECT COUNT(*) AS c FROM mailboxes WHERE email = 'keep@untouched.com'"
+            ).fetchone()["c"]
+            synced = conn.execute(
+                "SELECT COUNT(*) AS c FROM mailboxes WHERE email = 'synced@example.com'"
+            ).fetchone()["c"]
+        self.assertEqual(untouched, 1)
+        self.assertEqual(synced, 1)
 
 
 if __name__ == "__main__":

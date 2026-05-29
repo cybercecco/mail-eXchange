@@ -1,20 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-sync_maps() {
-  cp /data/generated/virtual_mailbox_maps /etc/postfix/generated/virtual_mailbox_maps
-  cp /data/generated/virtual_mailbox_catchall /etc/postfix/generated/virtual_mailbox_catchall
-  cp /data/generated/transport_maps /etc/postfix/generated/transport_maps
-  cp /data/generated/transport_catchall /etc/postfix/generated/transport_catchall
-  cp /data/generated/virtual_alias_domains /etc/postfix/generated/virtual_alias_domains
-  cp /data/generated/virtual_alias_maps /etc/postfix/generated/virtual_alias_maps
-  cp /data/generated/relay_sender_access /etc/postfix/generated/relay_sender_access
-  rm -f /etc/postfix/generated/relay_client_access_*.cidr
-  for f in /data/generated/relay_client_access_*.cidr; do
-    [[ -f "${f}" ]] || continue
-    cp "${f}" "/etc/postfix/generated/$(basename "${f}")"
-  done
-}
+MAIL_CFG="${MAIL_CONFIG_DIR:-/mail-exchange-config}"
+SOURCE_GENERATED="${MAIL_CFG}/postfix/generated"
+GENERATED_DIR="/etc/postfix/generated"
 
 sync_sasl_users() {
   local passwd_file="/data/sasl/relay_passwd"
@@ -235,21 +224,38 @@ watch_queue() {
   done
 }
 
-mkdir -p /etc/postfix/generated
-mkdir -p /data/generated
+ensure_postfix_config() {
+  mkdir -p /etc/postfix/sasl "${SOURCE_GENERATED}"
+  if [[ -f "${MAIL_CFG}/postfix/main.cf" ]]; then
+    cp -f "${MAIL_CFG}/postfix/main.cf" /etc/postfix/main.cf
+  elif [[ ! -f /etc/postfix/main.cf && -f /usr/share/mail-exchange/postfix/main.cf ]]; then
+    cp /usr/share/mail-exchange/postfix/main.cf /etc/postfix/main.cf
+  fi
+  if [[ -f "${MAIL_CFG}/postfix/sasl/smtpd.conf" ]]; then
+    cp -f "${MAIL_CFG}/postfix/sasl/smtpd.conf" /etc/postfix/sasl/smtpd.conf
+  elif [[ ! -f /etc/postfix/sasl/smtpd.conf && -f /usr/share/mail-exchange/postfix/sasl/smtpd.conf ]]; then
+    cp /usr/share/mail-exchange/postfix/sasl/smtpd.conf /etc/postfix/sasl/smtpd.conf
+  fi
+}
+
+mkdir -p "${SOURCE_GENERATED}"
+if [[ "${SOURCE_GENERATED}" != "${GENERATED_DIR}" ]]; then
+  rm -rf "${GENERATED_DIR}"
+  ln -sfn "${SOURCE_GENERATED}" "${GENERATED_DIR}"
+fi
+mkdir -p "${GENERATED_DIR}"
 mkdir -p /data/logs /data/stats
 touch /data/logs/postfix.log
+ensure_postfix_config
 watch_queue &
 
-touch /data/generated/virtual_mailbox_maps
-touch /data/generated/virtual_mailbox_catchall
-touch /data/generated/transport_maps
-touch /data/generated/transport_catchall
-touch /data/generated/virtual_alias_domains
-touch /data/generated/virtual_alias_maps
-touch /data/generated/relay_sender_access
-
-sync_maps
+touch "${GENERATED_DIR}/virtual_mailbox_maps"
+touch "${GENERATED_DIR}/virtual_mailbox_catchall"
+touch "${GENERATED_DIR}/transport_maps"
+touch "${GENERATED_DIR}/transport_catchall"
+touch "${GENERATED_DIR}/virtual_alias_domains"
+touch "${GENERATED_DIR}/virtual_alias_maps"
+touch "${GENERATED_DIR}/relay_sender_access"
 
 # Chrooted smtp(8) needs Docker DNS to reach amavis/opendkim by service name.
 mkdir -p /var/spool/postfix/etc
@@ -320,42 +326,45 @@ sed -i '/^10025 inet/,/^[^[:space:]#]/{
 postconf -e "maillog_file_prefixes = /var, /dev/stdout, /data/logs"
 postconf -e "maillog_file = /dev/stdout"
 
-postmap /etc/postfix/generated/virtual_mailbox_maps
-postmap /etc/postfix/generated/transport_maps
-postmap /etc/postfix/generated/virtual_alias_domains
-postmap /etc/postfix/generated/virtual_alias_maps
-postmap /etc/postfix/generated/relay_sender_access
+postmap "${GENERATED_DIR}/virtual_mailbox_maps"
+postmap "${GENERATED_DIR}/transport_maps"
+postmap "${GENERATED_DIR}/virtual_alias_domains"
+postmap "${GENERATED_DIR}/virtual_alias_maps"
+postmap "${GENERATED_DIR}/relay_sender_access"
 
 postconf -e "maillog_file = /data/logs/postfix.log"
 tail -F /data/logs/postfix.log &
+
+reload_postfix_maps() {
+  postconf -e "maillog_file = /dev/stdout"
+  postmap "${GENERATED_DIR}/virtual_mailbox_maps"
+  postmap "${GENERATED_DIR}/transport_maps"
+  postmap "${GENERATED_DIR}/virtual_alias_domains"
+  postmap "${GENERATED_DIR}/virtual_alias_maps"
+  postmap "${GENERATED_DIR}/relay_sender_access"
+  postconf -e "maillog_file = /data/logs/postfix.log"
+  postfix reload || true
+}
 
 watch_maps() {
   local old_sum=""
   while true; do
     local current_sum map_files=()
     map_files=(
-      /data/generated/virtual_mailbox_maps
-      /data/generated/virtual_mailbox_catchall
-      /data/generated/transport_maps
-      /data/generated/transport_catchall
-      /data/generated/virtual_alias_domains
-      /data/generated/virtual_alias_maps
-      /data/generated/relay_sender_access
+      "${GENERATED_DIR}/virtual_mailbox_maps"
+      "${GENERATED_DIR}/virtual_mailbox_catchall"
+      "${GENERATED_DIR}/transport_maps"
+      "${GENERATED_DIR}/transport_catchall"
+      "${GENERATED_DIR}/virtual_alias_domains"
+      "${GENERATED_DIR}/virtual_alias_maps"
+      "${GENERATED_DIR}/relay_sender_access"
     )
     shopt -s nullglob
-    local cidr_files=(/data/generated/relay_client_access_*.cidr)
+    local cidr_files=("${GENERATED_DIR}"/relay_client_access_*.cidr)
     shopt -u nullglob
     current_sum="$(sha256sum "${map_files[@]}" "${cidr_files[@]}" 2>/dev/null | sha256sum | awk '{print $1}')"
     if [[ "${current_sum}" != "${old_sum}" ]]; then
-      sync_maps
-      postconf -e "maillog_file = /dev/stdout"
-      postmap /etc/postfix/generated/virtual_mailbox_maps
-      postmap /etc/postfix/generated/transport_maps
-      postmap /etc/postfix/generated/virtual_alias_domains
-      postmap /etc/postfix/generated/virtual_alias_maps
-      postmap /etc/postfix/generated/relay_sender_access
-      postconf -e "maillog_file = /data/logs/postfix.log"
-      postfix reload || true
+      reload_postfix_maps
       old_sum="${current_sum}"
     fi
     sleep 10

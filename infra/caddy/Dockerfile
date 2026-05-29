@@ -5,6 +5,9 @@ RUN xcaddy build \
 
 FROM caddy:2-alpine
 
+ENV TZ=Europe/Rome
+RUN apk add --no-cache tzdata
+
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 COPY infra/caddy/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

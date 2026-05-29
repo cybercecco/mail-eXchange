@@ -1,0 +1,8 @@
+# Remote ClamAV (mx-clamav): INSTREAM over TCP
+@av_scanners = (
+  ['ClamAV-clamd',
+    \&ask_daemon, ["*", "clamd:[clamav]:3310"],
+    qr/\bOK$/m, qr/\bFOUND$/m,
+    qr/^.*?: (?!Infected Archive)(.*) FOUND$/m ],
+);
+@av_scanners_backup = ();

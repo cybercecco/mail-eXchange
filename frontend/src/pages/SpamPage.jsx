@@ -471,7 +471,8 @@ export default function SpamPage({ onError }) {
           {saved && <span className="spam-saved">Configurazione salvata e file rigenerati.</span>}
           <p className="panel-hint" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
             Dopo il salvataggio, Postfix/Amavis ricaricano i file generati in{" "}
-            <code>/data/generated/</code>. Amavis esegue <code>reload</code> automaticamente entro
+            <code>config/spamassassin/</code> e <code>config/amavis/</code> sul host. Amavis esegue{" "}
+            <code>reload</code> automaticamente entro
             ~15 secondi quando cambiano le regole spam.
           </p>
         </div>

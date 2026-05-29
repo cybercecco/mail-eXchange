@@ -13,3 +13,10 @@ frontend/dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# Config generata/runtime (statica versionata sotto config/)
+config/postfix/generated/*
+!config/postfix/generated/.gitkeep
+config/spamassassin/local.cf
+config/amavis/spam-overrides.conf
+config/amavis/local-domains.conf

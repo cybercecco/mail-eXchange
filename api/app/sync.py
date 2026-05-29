@@ -328,15 +328,15 @@ def push_to_sibling(domain_id: int) -> Optional[str]:
     Push domain bundle snapshot to sibling server.
     Returns a warning string on failure, None if sync skipped or succeeded.
     """
-    sync_secret = resolve_sync_secret_for_domain_id(domain_id)
-    if not sync_secret:
-        return "Chiave precondivisa sync non configurata: sync disabilitato"
-
     sibling = normalize_sibling_fqdn(_sibling_for_domain(domain_id))
     if not sibling:
         return None
     if is_self_sync_target(sibling):
         return f"Sync saltato: il Server Cluster coincide con questo host ({sibling})"
+
+    sync_secret = resolve_sync_secret_for_domain_id(domain_id)
+    if not sync_secret:
+        return "Chiave precondivisa sync non configurata: sync disabilitato"
 
     payload = build_domain_sync_payload(domain_id)
     if payload is None:
@@ -558,6 +558,8 @@ def apply_incoming_mailbox_sync(payload: SyncDomainBundlePayload) -> dict[str, s
 
 
 def attach_sync_warning(result: dict, domain_id: int) -> dict:
+    if not domain_has_cluster_peer(domain_id):
+        return result
     warning = push_to_sibling(domain_id)
     if warning:
         return {**result, "sync_warning": warning}
