@@ -201,11 +201,12 @@ def write_docker_dns_compose_override() -> None:
     (GENERATED_DIR / "docker-dns.env").write_text("\n".join(env_lines), encoding="utf-8")
 
 
-def update_settings(payload: SystemSettingsUpdate) -> dict:
-    normalized = {
-        "public_url": normalize_public_hostname(payload.public_url),
-        "acme_email": payload.acme_email.strip(),
-        "docker_dns": normalize_docker_dns(payload.docker_dns_servers),
+def persist_settings(settings: dict) -> None:
+    """Write system settings payload to SQLite (used for rollback)."""
+    payload = {
+        "public_url": settings["public_url"],
+        "acme_email": settings["acme_email"],
+        "docker_dns": normalize_docker_dns(settings.get("docker_dns")),
     }
     with db() as conn:
         conn.execute(
@@ -213,9 +214,18 @@ def update_settings(payload: SystemSettingsUpdate) -> dict:
             INSERT INTO system_settings (id, json_payload) VALUES (1, ?)
             ON CONFLICT(id) DO UPDATE SET json_payload = excluded.json_payload
             """,
-            (json.dumps(normalized),),
+            (json.dumps(payload),),
         )
         conn.commit()
+
+
+def update_settings(payload: SystemSettingsUpdate) -> dict:
+    normalized = {
+        "public_url": normalize_public_hostname(payload.public_url),
+        "acme_email": payload.acme_email.strip(),
+        "docker_dns": normalize_docker_dns(payload.docker_dns_servers),
+    }
+    persist_settings(normalized)
     write_docker_dns_compose_override()
     result = settings_for_api(normalized)
     result["docker_dns_servers"] = docker_dns_servers_text(normalized)

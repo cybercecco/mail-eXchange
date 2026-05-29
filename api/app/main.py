@@ -317,11 +317,26 @@ def api_get_settings(_admin: AdminUser) -> dict:
 
 @app.put("/api/settings")
 def api_update_settings(payload: SystemSettingsUpdate, _admin: AdminUser) -> dict:
-    from app.docker_compose_apply import apply_docker_stack_settings
+    from app.docker_compose_apply import SettingsInfraChanges, apply_settings_changes
+    from app.system_settings import get_settings, persist_settings
 
+    previous = get_settings()
     settings = update_settings(payload)
+    current = get_settings()
+    changes = SettingsInfraChanges(
+        public_url=previous.get("public_url") != current.get("public_url"),
+        acme_email=previous.get("acme_email") != current.get("acme_email"),
+        docker_dns=previous.get("docker_dns") != current.get("docker_dns"),
+    )
+
     regenerate_files()
-    apply_result = apply_docker_stack_settings()
+    apply_result = apply_settings_changes(changes)
+    if apply_result.get("apply_failed"):
+        persist_settings(previous)
+        regenerate_files()
+        detail = apply_result.get("dns_apply_message") or "Applicazione impostazioni fallita"
+        raise HTTPException(status_code=502, detail=detail)
+
     return {
         "status": "updated",
         "settings": settings,
