@@ -22,6 +22,9 @@ inet_protocols = all
 
 mynetworks = 127.0.0.0/8 [::1]/128
 
+# Virtual-only: do not use passwd/aliases for local recipient checks.
+local_recipient_maps =
+
 virtual_mailbox_domains = hash:/etc/postfix/generated/virtual_alias_domains
 virtual_mailbox_maps = hash:/etc/postfix/generated/virtual_mailbox_maps, regexp:/etc/postfix/generated/virtual_mailbox_catchall
 virtual_alias_maps = hash:/etc/postfix/generated/virtual_alias_maps
@@ -30,12 +33,14 @@ transport_maps = hash:/etc/postfix/generated/transport_maps, regexp:/etc/postfix
 # when a valid domain has no transport entry (e.g. Amavis postmaster notices).
 virtual_transport = error:5.1.1 Recipient delivery is not configured
 
-# Outbound relay (non-local recipients): permit mynetworks (internal), SASL auth,
-# or client IP in relay_source_ips for envelope sender @domain (relay_sender_access).
-# Inbound MX to local virtual domains is not subject to smtpd_relay_restrictions.
+# Relay policy at RCPT time. Virtual domains with transport_maps are class=virtual
+# but still evaluated here; permit inbound RCPT before outbound relay_sender_access.
+# Outbound relay: client IP in relay_source_ips for envelope sender @domain.
 smtpd_relay_restrictions =
   permit_mynetworks,
   permit_sasl_authenticated,
+  check_recipient_access hash:/etc/postfix/generated/virtual_mailbox_maps,
+  check_recipient_access regexp:/etc/postfix/generated/virtual_mailbox_catchall,
   check_sender_access hash:/etc/postfix/generated/relay_sender_access,
   reject
 

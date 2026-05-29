@@ -72,6 +72,9 @@ fi
 docker compose "${COMPOSE_ARGS[@]}" pull
 docker compose "${COMPOSE_ARGS[@]}" up -d
 
+# main.cf is bind-mounted via config volume; restart picks up seed-mail-config sync.
+docker restart mx-postfix 2>/dev/null || true
+
 # Applica DNS Docker da impostazioni salvate (volume mail-data)
 sleep 4
 if docker cp mx-api:/data/generated/docker-dns.override.yml docker-dns.override.yml 2>/dev/null; then

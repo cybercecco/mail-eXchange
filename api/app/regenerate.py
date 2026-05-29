@@ -77,6 +77,18 @@ POSTMASTER_NO_ADMIN_TRANSPORT = (
 )
 
 
+def _dedupe_map_lines(lines: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for line in lines:
+        key = line.split(maxsplit=1)[0].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(line)
+    return deduped
+
+
 def admin_notify_emails(conn) -> list[str]:
     rows = conn.execute(
         """
@@ -221,6 +233,9 @@ def regenerate_files() -> None:
         # transport_maps: domain-only key (Postfix transport(5) order); @domain is not used.
         transport_maps_lines.append(f"{name} {transport_route}")
         transport_catchall_lines.append(f"/^.+@{escaped_domain}$/ {transport_route}")
+
+    virtual_mailbox_maps_lines = _dedupe_map_lines(virtual_mailbox_maps_lines)
+    transport_maps_lines = _dedupe_map_lines(transport_maps_lines)
 
     (POSTFIX_GENERATED_DIR / "virtual_mailbox_maps").write_text(
         "\n".join(virtual_mailbox_maps_lines)

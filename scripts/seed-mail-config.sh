@@ -21,10 +21,18 @@ copy_if_missing() {
   fi
 }
 
-copy_if_missing "${TEMPLATE_ROOT}/postfix/main.cf" "${CONFIG_ROOT}/postfix/main.cf"
-copy_if_missing "${TEMPLATE_ROOT}/postfix/sasl/smtpd.conf" "${CONFIG_ROOT}/postfix/sasl/smtpd.conf"
-copy_if_missing "${TEMPLATE_ROOT}/amavis/amavisd.conf" "${CONFIG_ROOT}/amavis/conf.d/50-user"
-copy_if_missing \
+# Repo-managed static files: always refresh from infra on deploy.
+copy_static() {
+  local src="$1" dest="$2"
+  mkdir -p "$(dirname "${dest}")"
+  cp "${src}" "${dest}"
+  echo "sync: ${dest}"
+}
+
+copy_static "${TEMPLATE_ROOT}/postfix/main.cf" "${CONFIG_ROOT}/postfix/main.cf"
+copy_static "${TEMPLATE_ROOT}/postfix/sasl/smtpd.conf" "${CONFIG_ROOT}/postfix/sasl/smtpd.conf"
+copy_static "${TEMPLATE_ROOT}/amavis/amavisd.conf" "${CONFIG_ROOT}/amavis/conf.d/50-user"
+copy_static \
   "${TEMPLATE_ROOT}/amavis/52-clamav-scanner" \
   "${CONFIG_ROOT}/amavis/conf.d/52-clamav-scanner"
 
