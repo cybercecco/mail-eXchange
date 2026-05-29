@@ -481,7 +481,7 @@ export default function DomainsPage({
                             relayAllInbound
                               ? "Tutta la posta in ingresso per @dominio viene instradata all'unico server di destinazione, senza caselle esplicite."
                               : destinations.length === 1
-                                ? "Qualsiasi indirizzo @dominio viene instradato all'unico server di destinazione configurato, anche senza casella esplicita."
+                                ? "Abilita questa opzione per instradare qualsiasi indirizzo @dominio al server destinazione, senza caselle esplicite."
                                 : destinations.length === 0
                                   ? "Aggiungi esattamente un server di destinazione e abilita il dominio per attivare l'inoltro catch-all."
                                   : "Rimuovi i server extra: con l'inoltro catch-all è consentito un solo server destinazione."

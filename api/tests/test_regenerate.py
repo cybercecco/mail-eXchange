@@ -83,11 +83,40 @@ class RegenerateCatchAllTest(unittest.TestCase):
             regenerate_files()
 
         transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
-        self.assertIn("@multi.example smtp:[first.backend]:2525", transport)
-        self.assertNotIn("@multi.example smtp:[second.backend]:26", transport)
+        self.assertIn("multi.example smtp:[first.backend]:2525", transport)
+        self.assertNotIn("multi.example smtp:[second.backend]:26", transport)
         self.assertTrue(
             any("2 destinations configured" in message for message in logs.output)
         )
+
+    def test_relay_all_domain_accepts_any_local_part(self) -> None:
+        with db_module.db() as conn:
+            self._insert_domain(
+                conn,
+                "iot.relay.example",
+                relay_all_inbound=True,
+                destination=("relay.backend", 2525),
+            )
+            conn.commit()
+
+        regenerate_files()
+
+        mailbox_maps = (
+            self.generated_dir / "virtual_mailbox_maps"
+        ).read_text(encoding="utf-8")
+        alias_domains = (
+            self.generated_dir / "virtual_alias_domains"
+        ).read_text(encoding="utf-8")
+        transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
+
+        self.assertIn("iot.relay.example OK", alias_domains)
+        self.assertIn("@iot.relay.example OK", mailbox_maps)
+        self.assertIn("iot.relay.example smtp:[relay.backend]:2525", transport)
+        self.assertNotIn("\n@iot.relay.example smtp:", transport)
+        catchall_transport = (
+            self.generated_dir / "transport_catchall"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/^.+@iot\\.relay\\.example$/ smtp:[relay.backend]:2525", catchall_transport)
 
     def test_catch_all_generates_transport_and_regexp_maps(self) -> None:
         with db_module.db() as conn:
@@ -109,10 +138,18 @@ class RegenerateCatchAllTest(unittest.TestCase):
         regenerate_files()
 
         transport = (self.generated_dir / "transport_maps").read_text(encoding="utf-8")
+        mailbox_maps = (
+            self.generated_dir / "virtual_mailbox_maps"
+        ).read_text(encoding="utf-8")
+        alias_domains = (
+            self.generated_dir / "virtual_alias_domains"
+        ).read_text(encoding="utf-8")
         catchall = (self.generated_dir / "virtual_mailbox_catchall").read_text(encoding="utf-8")
 
-        self.assertIn("@catchall.example smtp:[relay.backend]:2525", transport)
+        self.assertIn("catchall.example smtp:[relay.backend]:2525", transport)
         self.assertIn("known@catchall.example smtp:[other.backend]:25", transport)
+        self.assertIn("@catchall.example OK", mailbox_maps)
+        self.assertIn("catchall.example OK", alias_domains)
         self.assertIn("/^.+@catchall\\.example$/ OK", catchall)
 
     def test_catch_all_skipped_without_destination(self) -> None:

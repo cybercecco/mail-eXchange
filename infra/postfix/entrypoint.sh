@@ -5,6 +5,7 @@ sync_maps() {
   cp /data/generated/virtual_mailbox_maps /etc/postfix/generated/virtual_mailbox_maps
   cp /data/generated/virtual_mailbox_catchall /etc/postfix/generated/virtual_mailbox_catchall
   cp /data/generated/transport_maps /etc/postfix/generated/transport_maps
+  cp /data/generated/transport_catchall /etc/postfix/generated/transport_catchall
   cp /data/generated/virtual_alias_domains /etc/postfix/generated/virtual_alias_domains
   cp /data/generated/virtual_alias_maps /etc/postfix/generated/virtual_alias_maps
   cp /data/generated/relay_sender_access /etc/postfix/generated/relay_sender_access
@@ -243,6 +244,7 @@ watch_queue &
 touch /data/generated/virtual_mailbox_maps
 touch /data/generated/virtual_mailbox_catchall
 touch /data/generated/transport_maps
+touch /data/generated/transport_catchall
 touch /data/generated/virtual_alias_domains
 touch /data/generated/virtual_alias_maps
 touch /data/generated/relay_sender_access
@@ -335,6 +337,7 @@ watch_maps() {
       /data/generated/virtual_mailbox_maps
       /data/generated/virtual_mailbox_catchall
       /data/generated/transport_maps
+      /data/generated/transport_catchall
       /data/generated/virtual_alias_domains
       /data/generated/virtual_alias_maps
       /data/generated/relay_sender_access

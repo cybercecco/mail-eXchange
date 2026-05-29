@@ -25,7 +25,7 @@ mynetworks = 127.0.0.0/8 [::1]/128
 virtual_mailbox_domains = hash:/etc/postfix/generated/virtual_alias_domains
 virtual_mailbox_maps = hash:/etc/postfix/generated/virtual_mailbox_maps, regexp:/etc/postfix/generated/virtual_mailbox_catchall
 virtual_alias_maps = hash:/etc/postfix/generated/virtual_alias_maps
-transport_maps = hash:/etc/postfix/generated/transport_maps
+transport_maps = hash:/etc/postfix/generated/transport_maps, regexp:/etc/postfix/generated/transport_catchall
 # Relay-only: per-recipient routing lives in transport_maps; avoid virtual(8) crash
 # when a valid domain has no transport entry (e.g. Amavis postmaster notices).
 virtual_transport = error:5.1.1 Recipient delivery is not configured
