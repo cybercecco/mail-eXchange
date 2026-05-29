@@ -11,6 +11,9 @@ mkdir -p /data/logs
 mkdir -p /data/quarantine/incoming/spam
 mkdir -p /data/quarantine/incoming/virus
 mkdir -p /data/quarantine/incoming/bad-header
+# Amavis (uid amavis) must create letter subdirs under incoming/ (quarantine_subdir_levels).
+chown -R amavis:amavis /data/quarantine/incoming 2>/dev/null || true
+chmod 775 /data/quarantine/incoming 2>/dev/null || true
 touch /data/logs/amavis.log
 chown amavis:amavis /data/logs/amavis.log 2>/dev/null || true
 chmod 664 /data/logs/amavis.log 2>/dev/null || true
