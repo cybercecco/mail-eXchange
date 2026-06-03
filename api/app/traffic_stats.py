@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.db import DATA_DIR
 
@@ -62,6 +64,16 @@ AMAVIS_ROUTE = re.compile(
 AMAVIS_TS = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})\s+(?P<time>\d{2}:\d{2}:\d{2}(?:,\d+)?)"
 )
+AMAVIS_MSG_ID = re.compile(r"\((?P<id>\d+-\d+(?:-\d+)?)\)")
+AMAVIS_DONE = re.compile(
+    r"\((?P<id>\d+-\d+(?:-\d+)?)\)\s+(?:Passed|Blocked|Died|Fatal|discarded|aborted)",
+    re.I,
+)
+AMAVIS_CLAM = re.compile(r"\((?P<id>\d+-\d+(?:-\d+)?)\).*ClamAV", re.I)
+AMAVIS_SPAM = re.compile(
+    r"\((?P<id>\d+-\d+(?:-\d+)?)\).*(?:SpamControl|SpamAssassin|check_init|spamd|SA\s)",
+    re.I,
+)
 
 MONTHS = {
     "Jan": 1,
@@ -79,8 +91,16 @@ MONTHS = {
 }
 
 
+def _log_timezone() -> timezone:
+    tz_name = os.environ.get("TZ", "Europe/Rome")
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return timezone.utc
+
+
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(_log_timezone())
 
 
 def _parse_postfix_ts(line: str, ref: datetime) -> datetime | None:
@@ -93,8 +113,9 @@ def _parse_postfix_ts(line: str, ref: datetime) -> datetime | None:
     day = int(match.group("day"))
     hour, minute, second = (int(part) for part in match.group("time").split(":"))
     year = ref.year
+    tz = ref.tzinfo or _log_timezone()
     try:
-        ts = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+        ts = datetime(year, month, day, hour, minute, second, tzinfo=tz)
     except ValueError:
         return None
     if ts > ref + timedelta(hours=2):
@@ -102,21 +123,24 @@ def _parse_postfix_ts(line: str, ref: datetime) -> datetime | None:
     return ts
 
 
-def _parse_amavis_ts(line: str) -> datetime | None:
+def _parse_amavis_ts(line: str, ref: datetime | None = None) -> datetime | None:
     match = AMAVIS_TS.match(line)
     if not match:
         return None
     time_part = match.group("time").replace(",", ".")
+    tz = (ref.tzinfo if ref else None) or _log_timezone()
     try:
-        return datetime.fromisoformat(f"{match.group('date')}T{time_part}").replace(
-            tzinfo=timezone.utc
-        )
+        return datetime.fromisoformat(f"{match.group('date')}T{time_part}").replace(tzinfo=tz)
     except ValueError:
         return None
 
 
 def _line_ts(line: str, ref: datetime) -> datetime | None:
-    return _parse_amavis_ts(line) or _parse_postfix_ts(line, ref)
+    return _parse_amavis_ts(line, ref) or _parse_postfix_ts(line, ref)
+
+
+def _tail_bytes_for_window(window_minutes: int) -> int:
+    return max(256_000, min(4_000_000, window_minutes * 12_000))
 
 
 def _tail_lines(path: Path, max_bytes: int = 512_000) -> list[str]:
@@ -145,6 +169,76 @@ def _is_outgoing_relay(line: str, detail: str) -> bool:
     return True
 
 
+def _empty_pipeline() -> dict[str, int]:
+    return {
+        "postfix_active": 0,
+        "postfix_to_amavis": 0,
+        "postfix_outbound": 0,
+        "postfix_deferred": 0,
+        "postfix_hold": 0,
+        "amavis": 0,
+        "clamav": 0,
+        "spamassassin": 0,
+    }
+
+
+def _parse_amavis_pipeline(max_age_seconds: int = 180) -> dict[str, int]:
+    """Count messages currently inside Amavis/ClamAV/SpamAssassin from recent log lines."""
+    now = _now()
+    cutoff = now - timedelta(seconds=max_age_seconds)
+    inflight: dict[str, dict[str, Any]] = {}
+
+    for line in _tail_lines(LOGS_DIR / "amavis.log", max_bytes=384_000):
+        ts = _line_ts(line, now)
+        if ts is not None and ts < cutoff:
+            continue
+        done = AMAVIS_DONE.search(line)
+        if done:
+            inflight.pop(done.group("id"), None)
+            continue
+        msg = AMAVIS_MSG_ID.search(line)
+        if not msg:
+            continue
+        msg_id = msg.group("id")
+        stage = "amavis"
+        if AMAVIS_CLAM.search(line):
+            stage = "clamav"
+        elif AMAVIS_SPAM.search(line):
+            stage = "spamassassin"
+        inflight[msg_id] = {"stage": stage, "ts": ts or now}
+
+    counts = {"amavis": 0, "clamav": 0, "spamassassin": 0}
+    for item in inflight.values():
+        stage = str(item.get("stage") or "amavis")
+        if stage in counts:
+            counts[stage] += 1
+        else:
+            counts["amavis"] += 1
+    return counts
+
+
+def read_pipeline_snapshot() -> dict[str, Any]:
+    """Merge Postfix queue snapshot with Amavis in-flight processing counts."""
+    snapshot = read_queue_snapshot()
+    raw_pipeline = snapshot.get("raw_pipeline") or {}
+    pipeline = _empty_pipeline()
+    pipeline["postfix_to_amavis"] = int(raw_pipeline.get("postfix_to_amavis", 0))
+    pipeline["postfix_outbound"] = int(raw_pipeline.get("postfix_outbound", 0))
+    active = int(snapshot.get("active", 0))
+    pipeline["postfix_active"] = max(0, active - pipeline["postfix_to_amavis"] - pipeline["postfix_outbound"])
+    pipeline["postfix_deferred"] = int(snapshot.get("deferred", 0))
+    pipeline["postfix_hold"] = int(snapshot.get("hold", 0))
+
+    amavis_counts = _parse_amavis_pipeline()
+    pipeline["amavis"] = amavis_counts["amavis"]
+    pipeline["clamav"] = amavis_counts["clamav"]
+    pipeline["spamassassin"] = amavis_counts["spamassassin"]
+
+    snapshot["pipeline"] = pipeline
+    snapshot["pipeline_updated_at"] = _now().isoformat()
+    return snapshot
+
+
 def read_queue_snapshot() -> dict[str, Any]:
     """Return the live Postfix queue snapshot written by mx-postfix watch_queue."""
     empty: dict[str, Any] = {
@@ -154,6 +248,7 @@ def read_queue_snapshot() -> dict[str, Any]:
         "hold": 0,
         "updated_at": None,
         "messages": {"active": [], "deferred": [], "hold": []},
+        "raw_pipeline": {},
         "source_available": False,
         "collected_at": _now().isoformat(),
     }
@@ -168,6 +263,7 @@ def read_queue_snapshot() -> dict[str, Any]:
     deferred = int(payload.get("deferred", 0))
     hold = int(payload.get("hold", 0))
     total = int(payload.get("total", active + deferred + hold))
+    raw_pipeline = payload.get("pipeline") if isinstance(payload.get("pipeline"), dict) else {}
     return {
         "total": total,
         "active": active,
@@ -179,6 +275,7 @@ def read_queue_snapshot() -> dict[str, Any]:
             "deferred": list(raw_messages.get("deferred") or []),
             "hold": list(raw_messages.get("hold") or []),
         },
+        "raw_pipeline": raw_pipeline,
         "source_available": True,
         "collected_at": _now().isoformat(),
     }
@@ -197,8 +294,9 @@ def _parse_postfix_arrival(arrival: str, ref: datetime) -> datetime | None:
     except ValueError:
         return None
     year = ref.year
+    tz = ref.tzinfo or _log_timezone()
     try:
-        ts = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+        ts = datetime(year, month, day, hour, minute, second, tzinfo=tz)
     except ValueError:
         return None
     if ts > ref + timedelta(hours=2):
@@ -299,7 +397,7 @@ def _parse_window_transit(
     incoming_messages: dict[str, dict[str, Any]] = {}
     outgoing_messages: dict[str, dict[str, Any]] = {}
 
-    for line in _tail_lines(LOGS_DIR / "postfix.log"):
+    for line in _tail_lines(LOGS_DIR / "postfix.log", _tail_bytes_for_window(window_minutes)):
         if not _in_window(line, now, cutoff):
             continue
         incoming = POSTFIX_INCOMING.search(line)
@@ -360,7 +458,7 @@ def _parse_window_transit(
             "summary": line.strip()[-240:],
         }
 
-    for line in _tail_lines(LOGS_DIR / "amavis.log"):
+    for line in _tail_lines(LOGS_DIR / "amavis.log", _tail_bytes_for_window(window_minutes)):
         if not _in_window(line, now, cutoff):
             continue
         blocked = AMAVIS_BLOCKED.search(line)
@@ -521,7 +619,7 @@ def collect_queue_listing(queue_type: str = "active", window_minutes: int = 60) 
 def _in_window(line: str, ref: datetime, cutoff: datetime) -> bool:
     ts = _line_ts(line, ref)
     if ts is None:
-        return True
+        return False
     return ts >= cutoff
 
 
@@ -534,20 +632,32 @@ def collect_traffic_stats(window_minutes: int = 60) -> dict[str, Any]:
     amavis_log = LOGS_DIR / "amavis.log"
 
     transit = _parse_window_transit(window_minutes, now, cutoff)
-    snapshot = read_queue_snapshot()
+    snapshot = read_pipeline_snapshot()
+    pipeline = snapshot.get("pipeline") or _empty_pipeline()
     queue_detail = {
         "active": snapshot["active"],
         "deferred": snapshot["deferred"],
         "hold": snapshot["hold"],
     }
+    in_transit = (
+        pipeline.get("postfix_active", 0)
+        + pipeline.get("postfix_to_amavis", 0)
+        + pipeline.get("postfix_outbound", 0)
+        + pipeline.get("postfix_deferred", 0)
+        + pipeline.get("postfix_hold", 0)
+        + pipeline.get("amavis", 0)
+        + pipeline.get("clamav", 0)
+        + pipeline.get("spamassassin", 0)
+    )
 
     return {
         "window_minutes": window_minutes,
         "collected_at": now.isoformat(),
         "ingresso": len(transit["incoming_ids"]),
-        "in_coda": snapshot["active"],
+        "in_coda": in_transit,
         "bloccate": len(transit["blocked_keys"]),
         "in_uscita": len(transit["outgoing_ids"]),
+        "pipeline": pipeline,
         "metric_scope": {
             "ingresso": "window",
             "in_coda": "live",

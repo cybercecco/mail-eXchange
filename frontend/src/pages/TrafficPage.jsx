@@ -12,20 +12,13 @@ const TIME_WINDOWS = [
   { value: 1440, label: "24 h" }
 ];
 
-const METRICS = [
+const WINDOW_METRICS = [
   {
     key: "ingresso",
     label: "Ingresso",
     hint: "Messaggi accettati da smtpd nella finestra (1 conteggio per queue ID).",
     color: "var(--accent)",
     queueType: "incoming"
-  },
-  {
-    key: "in_coda",
-    label: "In coda (antispam/AV)",
-    hint: "Messaggi attualmente in coda Postfix attiva (tempo reale, snapshot ~5 s).",
-    color: "var(--status-warn-fg)",
-    queueType: "active"
   },
   {
     key: "bloccate",
@@ -43,7 +36,66 @@ const METRICS = [
   }
 ];
 
-const QUEUE_DETAIL = [
+const PIPELINE_QUEUES = [
+  {
+    key: "postfix_active",
+    label: "Postfix attive",
+    hint: "Messaggi in coda attiva Postfix (non ancora in uscita verso Amavis o destinazione).",
+    queueType: "active",
+    badgeClass: "traffic-queue-badge-active"
+  },
+  {
+    key: "postfix_to_amavis",
+    label: "Postfix → Amavis",
+    hint: "Consegna attiva verso il filtro antispam/AV (porta 10024).",
+    queueType: "active",
+    badgeClass: "traffic-queue-badge-amavis"
+  },
+  {
+    key: "postfix_outbound",
+    label: "Postfix uscita",
+    hint: "Consegna attiva verso server di destinazione esterni.",
+    queueType: "active",
+    badgeClass: "traffic-queue-badge-outbound"
+  },
+  {
+    key: "postfix_deferred",
+    label: "Postfix differite",
+    hint: "Coda differita Postfix (retry programmati).",
+    queueType: "deferred",
+    badgeClass: "traffic-queue-badge-deferred"
+  },
+  {
+    key: "postfix_hold",
+    label: "Postfix hold",
+    hint: "Messaggi in hold amministrativo.",
+    queueType: "hold",
+    badgeClass: "traffic-queue-badge-hold"
+  },
+  {
+    key: "amavis",
+    label: "Amavis",
+    hint: "Messaggi in elaborazione Amavis (log recenti, ~3 min).",
+    queueType: "active",
+    badgeClass: "traffic-queue-badge-amavis"
+  },
+  {
+    key: "clamav",
+    label: "ClamAV",
+    hint: "Fase scansione antivirus ClamAV dentro Amavis.",
+    queueType: "active",
+    badgeClass: "traffic-queue-badge-clamav"
+  },
+  {
+    key: "spamassassin",
+    label: "SpamAssassin",
+    hint: "Fase analisi antispam SpamAssassin dentro Amavis.",
+    queueType: "active",
+    badgeClass: "traffic-queue-badge-spam"
+  }
+];
+
+const POSTFIX_QUEUE_DETAIL = [
   { key: "active", label: "Attive", queueType: "active", badgeClass: "traffic-queue-badge-active" },
   { key: "deferred", label: "Differite", queueType: "deferred", badgeClass: "traffic-queue-badge-deferred" },
   { key: "hold", label: "In hold", queueType: "hold", badgeClass: "traffic-queue-badge-hold" }
@@ -263,18 +315,20 @@ export default function TrafficPage({ isAdmin }) {
     return () => clearInterval(timer);
   }, [loadQueueSnapshot]);
 
-  const values = METRICS.map((metric) => stats?.[metric.key] ?? 0);
+  const values = WINDOW_METRICS.map((metric) => stats?.[metric.key] ?? 0);
   const maxValue = Math.max(...values, 1);
 
   const sources = stats?.sources;
   const sourcesReady = sources && Object.values(sources).some(Boolean);
+  const pipeline = queueSnapshot?.pipeline ?? stats?.pipeline ?? {};
   const liveCounts = queueSnapshot ?? stats?.queue_detail;
-  const liveUpdatedAt = queueSnapshot?.updated_at;
+  const liveUpdatedAt = queueSnapshot?.pipeline_updated_at ?? queueSnapshot?.updated_at;
   const liveTotal =
     queueSnapshot?.total ??
-    (liveCounts
-      ? (liveCounts.active ?? 0) + (liveCounts.deferred ?? 0) + (liveCounts.hold ?? 0)
-      : 0);
+    PIPELINE_QUEUES.reduce((sum, item) => sum + (pipeline[item.key] ?? 0), 0);
+  const windowLabelActive = stats?.window_minutes
+    ? windowLabel(stats.window_minutes)
+    : windowLabel(windowMinutes);
 
   return (
     <>
@@ -282,10 +336,10 @@ export default function TrafficPage({ isAdmin }) {
         <div>
           <h2>Traffico mail</h2>
           <p>
-            Andamento del transito mail: conteggi per messaggio (queue ID), non righe di log.
-            Ingresso, bloccate e uscita usano la finestra selezionata; in coda mostra lo snapshot
-            live della coda attiva Postfix/Amavis. Clicca su card, barre o badge per il dettaglio.
-            Finestra attuale: ultimi {windowLabel(windowMinutes)}.
+            Code in transito (Postfix, Amavis, ClamAV, SpamAssassin) aggiornate ogni ~5 s. Ingresso,
+            bloccate e uscita contano messaggi unici nella finestra temporale selezionata.
+            Finestra statistiche: ultimi {windowLabelActive}
+            {stats?.window_minutes && stats.window_minutes !== windowMinutes ? " (aggiornamento…)" : ""}.
           </p>
         </div>
         <div className="page-header-actions traffic-header-actions">
@@ -339,9 +393,9 @@ export default function TrafficPage({ isAdmin }) {
       <div className="panel traffic-live-panel">
         <div className="traffic-live-header">
           <div>
-            <h3>Code Postfix (tempo reale)</h3>
+            <h3>Code in transito (tempo reale)</h3>
             <p className="traffic-live-meta">
-              Snapshot ogni ~5 s da mx-postfix
+              Postfix, Amavis, ClamAV e SpamAssassin — snapshot ogni ~5 s
               {liveUpdatedAt ? (
                 <>
                   {" · "}
@@ -355,25 +409,25 @@ export default function TrafficPage({ isAdmin }) {
             </p>
           </div>
           <div className="traffic-live-total">
-            <span>Totale messaggi</span>
+            <span>Totale in transito</span>
             <strong>{liveTotal}</strong>
           </div>
         </div>
 
         {snapshotError && <div className="alert-error">{snapshotError}</div>}
 
-        <div className="traffic-live-badges">
-          {QUEUE_DETAIL.map((item) => (
+        <div className="traffic-live-badges traffic-pipeline-badges">
+          {PIPELINE_QUEUES.map((item) => (
             <button
               key={item.key}
               type="button"
               className={`traffic-live-badge traffic-clickable ${item.badgeClass}`}
               onClick={() => openQueueDetail(item.queueType)}
-              title={`Apri contenuto: ${item.label}`}
+              title={item.hint}
             >
               <span className="traffic-live-badge-label">{item.label}</span>
               <strong className="traffic-live-badge-value">
-                {liveCounts?.[item.key] ?? (snapshotLoading ? "…" : 0)}
+                {pipeline[item.key] ?? (snapshotLoading ? "…" : 0)}
               </strong>
             </button>
           ))}
@@ -452,7 +506,7 @@ export default function TrafficPage({ isAdmin }) {
       </div>
 
       <div className="traffic-cards">
-        {METRICS.map((metric) => (
+        {WINDOW_METRICS.map((metric) => (
           <button
             key={metric.key}
             type="button"
@@ -461,19 +515,25 @@ export default function TrafficPage({ isAdmin }) {
             title={metric.hint || `Apri contenuto: ${metric.label}`}
           >
             <span className="traffic-card-label">{metric.label}</span>
+            <span className="traffic-card-scope">finestra {windowLabelActive}</span>
             <strong className="traffic-card-value">{stats?.[metric.key] ?? (loading ? "…" : 0)}</strong>
           </button>
         ))}
+        <div className="traffic-card traffic-card-static" title="Somma di tutte le code in transito (tempo reale)">
+          <span className="traffic-card-label">In transito ora</span>
+          <span className="traffic-card-scope">tempo reale</span>
+          <strong className="traffic-card-value">{stats?.in_coda ?? liveTotal ?? (loading ? "…" : 0)}</strong>
+        </div>
       </div>
 
       <div className="panel traffic-chart-panel">
-        <h3>Andamento transito ({windowLabel(windowMinutes)})</h3>
+        <h3>Andamento transito ({windowLabelActive})</h3>
         <p className="panel-hint traffic-chart-hint">
-          Ogni barra rappresenta messaggi unici in transito. &ldquo;In coda&rdquo; è tempo reale;
-          le altre metriche coprono la finestra selezionata.
+          Conteggi storici per messaggio unico nella finestra selezionata. Le code live sono nella
+          sezione sopra.
         </p>
         <div className="traffic-chart" role="img" aria-label="Grafico a barre del traffico mail">
-          {METRICS.map((metric) => {
+          {WINDOW_METRICS.map((metric) => {
             const value = stats?.[metric.key] ?? 0;
             const height = Math.max(4, Math.round((value / maxValue) * 100));
             return (
@@ -500,9 +560,9 @@ export default function TrafficPage({ isAdmin }) {
 
       {stats?.queue_detail && (
         <div className="panel">
-          <h3>Dettaglio coda Postfix (da statistiche)</h3>
+          <h3>Dettaglio coda Postfix (snapshot)</h3>
           <ul className="list-items traffic-queue-detail">
-            {QUEUE_DETAIL.map((item) => (
+            {POSTFIX_QUEUE_DETAIL.map((item) => (
               <li key={item.key} className="list-item">
                 <button
                   type="button"

@@ -14,6 +14,7 @@ MAP_BASENAMES=(
   virtual_alias_domains
   virtual_alias_maps
   relay_sender_access
+  relay_restriction_classes
 )
 
 sync_sasl_users() {
@@ -89,10 +90,35 @@ parse_queue_messages() {
   printf '%s\n' "${output}" | awk -v status="${status}" -f /usr/local/bin/parse_postqueue.awk
 }
 
+classify_active_pipeline() {
+  local active_out="$1"
+  local to_amavis=0 outbound=0 local_q=0
+  if printf '%s' "${active_out}" | grep -q "Mail queue is empty"; then
+    printf '{"postfix_to_amavis":0,"postfix_outbound":0,"postfix_local":0}'
+    return
+  fi
+  while read -r qid; do
+    [[ -n "${qid}" ]] || continue
+    local meta relay rl
+    meta="$(postcat -qe "${qid}" 2>/dev/null || postcat -q "${qid}" 2>/dev/null || true)"
+    relay="$(printf '%s\n' "${meta}" | awk -F= '/^named_attribute: relay=/ {print $2; exit}')"
+    rl="$(printf '%s' "${relay}" | tr '[:upper:]' '[:lower:]')"
+    if [[ "${rl}" == *"amavis"* || "${rl}" == *":10024"* ]]; then
+      to_amavis=$((to_amavis + 1))
+    elif [[ -n "${rl}" && "${rl}" != *"127.0.0.1"* ]]; then
+      outbound=$((outbound + 1))
+    else
+      local_q=$((local_q + 1))
+    fi
+  done < <(printf '%s\n' "${active_out}" | grep -E '^[0-9A-F]+' | awk '{print $1}')
+  printf '{"postfix_to_amavis":%s,"postfix_outbound":%s,"postfix_local":%s}' \
+    "${to_amavis}" "${outbound}" "${local_q}"
+}
+
 write_queue_snapshot() {
   local active=0 deferred=0 hold=0 total=0
   local active_out deferred_out hold_out
-  local active_messages deferred_messages hold_messages
+  local active_messages deferred_messages hold_messages pipeline_json
   active_out="$(postqueue -p 2>/dev/null || true)"
   if printf '%s' "${active_out}" | grep -q "Mail queue is empty"; then
     active=0
@@ -121,9 +147,10 @@ write_queue_snapshot() {
     hold_messages="$(parse_queue_messages hold "${hold_out}")"
   fi
   total=$((active + deferred + hold))
+  pipeline_json="$(classify_active_pipeline "${active_out}")"
   mkdir -p /data/stats
   cat > /data/stats/queue.json.tmp <<EOF
-{"total":${total},"active":${active},"deferred":${deferred},"hold":${hold},"updated_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","messages":{"active":${active_messages},"deferred":${deferred_messages},"hold":${hold_messages}}}
+{"total":${total},"active":${active},"deferred":${deferred},"hold":${hold},"updated_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","pipeline":${pipeline_json},"messages":{"active":${active_messages},"deferred":${deferred_messages},"hold":${hold_messages}}}
 EOF
   mv /data/stats/queue.json.tmp /data/stats/queue.json
 }
@@ -288,6 +315,8 @@ sync_generated_maps() {
   postmap "${GENERATED_DIR}/virtual_alias_domains" 2>/dev/null || true
   postmap "${GENERATED_DIR}/virtual_alias_maps" 2>/dev/null || true
   postmap "${GENERATED_DIR}/relay_sender_access" 2>/dev/null || true
+  apply_relay_restriction_classes
+  apply_relay_mynetworks
   postconf -e "maillog_file = /data/logs/postfix.log"
 
   for map_name in "${MAP_BASENAMES[@]}"; do
@@ -303,15 +332,67 @@ sync_generated_maps() {
 
 reload_postfix_maps() {
   sync_generated_maps
+  apply_relay_restriction_classes
+  apply_relay_mynetworks
   postfix reload 2>/dev/null || true
+}
+
+apply_relay_restriction_classes() {
+  local classes_file="${GENERATED_DIR}/relay_restriction_classes"
+  if [[ ! -f "${classes_file}" ]]; then
+    postconf -X smtpd_restriction_classes 2>/dev/null || true
+    return 0
+  fi
+  local classes=""
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%%#*}"
+    line="$(printf '%s' "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ -n "${line}" ]] || continue
+    if [[ "${line}" == smtpd_restriction_classes* ]]; then
+      classes="${line#smtpd_restriction_classes}"
+      classes="$(printf '%s' "${classes}" | sed 's/^[[:space:]]*//')"
+      continue
+    fi
+    local class_name="${line%% *}"
+    local class_rules="${line#${class_name}}"
+    class_rules="$(printf '%s' "${class_rules}" | sed 's/^[[:space:]]*//')"
+    [[ -n "${class_name}" && -n "${class_rules}" ]] || continue
+    # check_client_access OK stops the class; final reject denies non-listed relay clients.
+    if [[ "${class_rules}" != *reject* ]]; then
+      class_rules="${class_rules}, reject"
+    fi
+    postconf -e "${class_name} = ${class_rules}"
+  done < "${classes_file}"
+  if [[ -n "${classes}" ]]; then
+    postconf -e "smtpd_restriction_classes = ${classes}"
+  else
+    postconf -X smtpd_restriction_classes 2>/dev/null || true
+  fi
+}
+
+apply_relay_mynetworks() {
+  local relay_cidr="${GENERATED_DIR}/relay_mynetworks.cidr"
+  local base="${MYNETWORKS:-127.0.0.0/8 [::1]/128}"
+  if [[ ! -f "${relay_cidr}" ]]; then
+    shopt -s nullglob
+    local cidr_files=("${GENERATED_DIR}"/relay_client_access_*.cidr)
+    if [[ ${#cidr_files[@]} -gt 0 ]]; then
+      awk '!/^[[:space:]]*#/ && NF {print $1 "\tOK"}' "${cidr_files[@]}" | sort -u > "${relay_cidr}.tmp"
+      mv "${relay_cidr}.tmp" "${relay_cidr}"
+    fi
+    shopt -u nullglob
+  fi
+  if [[ -f "${relay_cidr}" ]] && grep -qv '^[[:space:]]*#' "${relay_cidr}" 2>/dev/null; then
+    postconf -e "mynetworks = ${base}, cidr:${relay_cidr}"
+  else
+    postconf -e "mynetworks = ${base}"
+  fi
 }
 
 if [[ -n "${MYHOSTNAME:-}" ]]; then
   postconf -e "myhostname = ${MYHOSTNAME}"
 fi
-if [[ -n "${MYNETWORKS:-}" ]]; then
-  postconf -e "mynetworks = ${MYNETWORKS}"
-fi
+apply_relay_mynetworks
 install_smtpd_tls_certs
 # Debian Postfix ships virtual_mailbox_base unset but postconf may expose it as empty;
 # virtual(8) then fatals when transport_maps has no match.
@@ -331,7 +412,7 @@ submission inet n       -       n       -       -       smtpd
   -o smtpd_tls_security_level=encrypt
   -o smtpd_sasl_auth_enable=yes
   -o smtpd_tls_auth_only=yes
-  -o smtpd_recipient_restrictions=reject_unauth_destination,reject_non_fqdn_recipient,reject_unknown_recipient_domain
+  -o smtpd_recipient_restrictions=permit_mynetworks,reject_unauth_destination,reject_non_fqdn_recipient,reject_unknown_recipient_domain
 EOF
 }
 
@@ -384,6 +465,8 @@ watch_maps() {
       "${SOURCE_GENERATED}/virtual_alias_domains"
       "${SOURCE_GENERATED}/virtual_alias_maps"
       "${SOURCE_GENERATED}/relay_sender_access"
+      "${SOURCE_GENERATED}/relay_restriction_classes"
+      "${SOURCE_GENERATED}/relay_mynetworks.cidr"
     )
     shopt -s nullglob
     local cidr_files=("${SOURCE_GENERATED}"/relay_client_access_*.cidr)

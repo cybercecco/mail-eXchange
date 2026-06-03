@@ -1604,6 +1604,19 @@ body.sidebar-scroll-lock {
   margin-bottom: 0.35rem;
 }
 
+.traffic-card-scope {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  opacity: 0.85;
+  margin-bottom: 0.35rem;
+}
+
+.traffic-card-static {
+  cursor: default;
+  border-style: dashed;
+}
+
 .traffic-card-value {
   font-size: 1.75rem;
   font-weight: 700;
@@ -1616,7 +1629,7 @@ body.sidebar-scroll-lock {
 
 .traffic-chart {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
   align-items: end;
   min-height: 220px;
@@ -1880,6 +1893,10 @@ body.sidebar-scroll-lock {
   gap: 0.75rem;
 }
 
+.traffic-pipeline-badges {
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+}
+
 .traffic-live-badge {
   display: flex;
   flex-direction: column;
@@ -1917,6 +1934,26 @@ body.sidebar-scroll-lock {
 .traffic-queue-badge-hold {
   border-color: var(--status-err-border);
   background: var(--status-err-bg);
+}
+
+.traffic-queue-badge-amavis {
+  border-color: color-mix(in srgb, #a78bfa 45%, var(--border));
+  background: color-mix(in srgb, #a78bfa 12%, var(--bg-elevated));
+}
+
+.traffic-queue-badge-outbound {
+  border-color: var(--status-ok-border);
+  background: var(--status-ok-bg);
+}
+
+.traffic-queue-badge-clamav {
+  border-color: color-mix(in srgb, #38bdf8 45%, var(--border));
+  background: color-mix(in srgb, #38bdf8 12%, var(--bg-elevated));
+}
+
+.traffic-queue-badge-spam {
+  border-color: color-mix(in srgb, #fb923c 45%, var(--border));
+  background: color-mix(in srgb, #fb923c 12%, var(--bg-elevated));
 }
 
 .traffic-control-section {

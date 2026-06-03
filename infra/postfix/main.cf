@@ -33,9 +33,8 @@ transport_maps = hash:/etc/postfix/generated/transport_maps, regexp:/etc/postfix
 # when a valid domain has no transport entry (e.g. Amavis postmaster notices).
 virtual_transport = error:5.1.1 Recipient delivery is not configured
 
-# Relay policy at RCPT time. Virtual domains with transport_maps are class=virtual
-# but still evaluated here; permit inbound RCPT before outbound relay_sender_access.
-# Outbound relay: client IP in relay_source_ips for envelope sender @domain.
+# Inbound MX: permit local recipients (virtual maps). Outbound relay: SASL, mynetworks,
+# or per-domain relay_source_ips via check_sender_access + smtpd_restriction_classes.
 smtpd_relay_restrictions =
   permit_mynetworks,
   permit_sasl_authenticated,
@@ -50,7 +49,9 @@ smtpd_sasl_path = smtpd
 smtpd_sasl_security_options = noanonymous
 broken_sasl_auth_clients = yes
 
+# Postfix 3.6+: permit_mynetworks must appear here too or trusted clients cannot relay.
 smtpd_recipient_restrictions =
+  permit_mynetworks,
   reject_unauth_destination,
   reject_non_fqdn_recipient,
   reject_unknown_recipient_domain

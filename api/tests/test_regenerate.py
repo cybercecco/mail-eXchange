@@ -216,14 +216,24 @@ class RegenerateCatchAllTest(unittest.TestCase):
         regenerate_files()
 
         sender_map = (self.postfix_generated / "relay_sender_access").read_text(encoding="utf-8")
+        class_map = (
+            self.postfix_generated / "relay_restriction_classes"
+        ).read_text(encoding="utf-8")
         cidr_map = (
             self.postfix_generated / "relay_client_access_relay_example.cidr"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("@relay.example\tcheck_client_access cidr:", sender_map)
-        self.assertIn("relay_client_access_relay_example.cidr", sender_map)
+        self.assertIn("@relay.example\trelay_relay_example", sender_map)
+        self.assertIn("relay_client_access_relay_example.cidr", class_map)
+        self.assertIn("relay_relay_example check_client_access cidr:", class_map)
+        self.assertIn("smtpd_restriction_classes relay_relay_example", class_map)
         self.assertIn("203.0.113.0/24\tOK", cidr_map)
         self.assertIn("203.0.113.10/32\tOK", cidr_map)
+        relay_mynetworks = (
+            self.postfix_generated / "relay_mynetworks.cidr"
+        ).read_text(encoding="utf-8")
+        self.assertIn("203.0.113.0/24\tOK", relay_mynetworks)
+        self.assertIn("203.0.113.10/32\tOK", relay_mynetworks)
 
     def test_relay_source_ips_removed_when_domain_updated(self) -> None:
         with db_module.db() as conn:

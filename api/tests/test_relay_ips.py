@@ -7,6 +7,7 @@ from app.relay_ips import (
     normalize_relay_source_ips,
     parse_relay_source_ips_text,
     relay_client_access_filename,
+    relay_restriction_class_name,
     relay_source_ips_from_db,
     relay_source_ips_to_db,
 )
@@ -51,6 +52,12 @@ class RelayIpsParseTest(unittest.TestCase):
         self.assertEqual(
             relay_client_access_filename("Example.COM"),
             "relay_client_access_example_com.cidr",
+        )
+
+    def test_restriction_class_name(self) -> None:
+        self.assertEqual(
+            relay_restriction_class_name("vetrobalsamo.com"),
+            "relay_vetrobalsamo_com",
         )
 
 

@@ -80,3 +80,9 @@ def relay_source_ips_to_db(ips: list[str]) -> Optional[str]:
 def relay_client_access_filename(domain_name: str) -> str:
     """Safe basename for per-domain Postfix cidr map files."""
     return "relay_client_access_" + domain_name.strip().lower().replace(".", "_") + ".cidr"
+
+
+def relay_restriction_class_name(domain_name: str) -> str:
+    """Postfix smtpd_restriction_classes entry for per-domain IP relay."""
+    slug = domain_name.strip().lower().replace(".", "_").replace("-", "_")
+    return f"relay_{slug}"

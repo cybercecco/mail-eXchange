@@ -90,7 +90,7 @@ from app.sync import (
     touch_domain_updated_at,
     verify_sync_auth,
 )
-from app.traffic_stats import collect_queue_listing, collect_traffic_stats, read_queue_snapshot
+from app.traffic_stats import collect_queue_listing, collect_traffic_stats, read_pipeline_snapshot
 from app.users import UserCreate, UserUpdate, create_user, delete_user, list_users, update_user
 
 app = FastAPI(title="Mail Exchange Control Plane")
@@ -580,7 +580,7 @@ def api_queue_delete(payload: QueueDeleteRequest, _admin: AdminUser) -> dict:
 
 @app.get("/api/stats/queue/snapshot")
 def api_queue_snapshot(_user: CurrentUser) -> dict:
-    return read_queue_snapshot()
+    return read_pipeline_snapshot()
 
 
 @app.post("/api/stats/queue/hold")

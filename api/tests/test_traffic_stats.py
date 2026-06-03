@@ -12,6 +12,7 @@ from app.traffic_stats import (
     _collect_outgoing_messages,
     collect_queue_listing,
     collect_traffic_stats,
+    read_pipeline_snapshot,
 )
 
 
@@ -114,14 +115,66 @@ class TrafficStatsTest(unittest.TestCase):
         self.assertEqual(stats["in_uscita"], 1)
         self.assertEqual(len(_collect_outgoing_messages(60, self.ref, self.ref - timedelta(minutes=60))), 1)
 
-    def test_in_coda_uses_active_queue_snapshot(self) -> None:
+    def test_in_coda_sums_pipeline_transit(self) -> None:
         self.postfix_log.write_text("", encoding="utf-8")
-        self._write_queue(active=7, deferred=99, hold=3)
+        self.queue_snapshot.write_text(
+            json.dumps(
+                {
+                    "total": 109,
+                    "active": 7,
+                    "deferred": 99,
+                    "hold": 3,
+                    "updated_at": self.ref.isoformat(),
+                    "pipeline": {"postfix_to_amavis": 2, "postfix_outbound": 1, "postfix_local": 4},
+                    "messages": {"active": [], "deferred": [], "hold": []},
+                }
+            ),
+            encoding="utf-8",
+        )
 
         stats = collect_traffic_stats(window_minutes=60)
-        self.assertEqual(stats["in_coda"], 7)
-        self.assertEqual(stats["queue_detail"]["active"], 7)
+        self.assertEqual(stats["in_coda"], 109)
+        self.assertEqual(stats["pipeline"]["postfix_active"], 4)
+        self.assertEqual(stats["pipeline"]["postfix_to_amavis"], 2)
         self.assertEqual(stats["queue_detail"]["deferred"], 99)
+
+    def test_window_minutes_filters_old_events(self) -> None:
+        self.postfix_log.write_text(
+            "\n".join(
+                [
+                    _postfix_line("28", "10:00:00", "smtpd[1]: A0EE01: client=1.2.3.4"),
+                    _postfix_line("28", "11:55:00", "smtpd[1]: A0EE02: client=5.6.7.8"),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self._write_queue()
+
+        stats_15 = collect_traffic_stats(window_minutes=15)
+        stats_360 = collect_traffic_stats(window_minutes=360)
+        self.assertEqual(stats_15["ingresso"], 1)
+        self.assertEqual(stats_360["ingresso"], 2)
+        self.assertEqual(stats_15["window_minutes"], 15)
+
+    def test_amavis_pipeline_counts_inflight_stages(self) -> None:
+        self.amavis_log.write_text(
+            "\n".join(
+                [
+                    _amavis_line("2026-05-28", "11:58:00", "(10001-01) ESMTP from [1.2.3.4]:25"),
+                    _amavis_line("2026-05-28", "11:58:01", "(10001-01) ClamAV-clamd: All checks passed"),
+                    _amavis_line("2026-05-28", "11:58:02", "(10002-02) ESMTP from [1.2.3.4]:25"),
+                    _amavis_line("2026-05-28", "11:58:03", "(10002-02) SpamControl: score=1.2"),
+                    _amavis_line("2026-05-28", "11:58:04", "(10003-03) Passed CLEAN"),
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self._write_queue()
+
+        pipeline = read_pipeline_snapshot()["pipeline"]
+        self.assertEqual(pipeline["clamav"], 1)
+        self.assertEqual(pipeline["spamassassin"], 1)
+        self.assertEqual(pipeline["amavis"], 0)
 
     def test_bloccate_excludes_warnings_and_counts_unique_messages(self) -> None:
         self.postfix_log.write_text(
