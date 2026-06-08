@@ -115,7 +115,10 @@ class SpamWhitelistGenerationTest(unittest.TestCase):
             "whitelist_from": ["trusted@partner.com", "*@safe.example"],
             "classification": {"required_score": 5.0},
         }
-        overrides = build_amavis_overrides(settings)
+        overrides = build_amavis_overrides(
+            settings, admin_emails=["admin@notify.example"]
+        )
+        self.assertIn("@virus_admin = qw( admin@notify.example );", overrides)
         self.assertIn("@score_sender_maps", overrides)
         self.assertIn("'trusted@partner.com' => [-100]", overrides)
         self.assertIn("'.safe.example' => [-100]", overrides)

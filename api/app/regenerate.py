@@ -107,6 +107,33 @@ def admin_notify_emails(conn) -> list[str]:
     return [row["email"] for row in rows]
 
 
+def _add_postmaster_routing(
+    postmaster_addr: str,
+    *,
+    admin_emails: list[str],
+    virtual_mailbox_maps_lines: list[str],
+    virtual_alias_maps_lines: list[str],
+    transport_maps_lines: list[str],
+    admin_outbound_transports: set[str],
+) -> None:
+    """Route postmaster@* to admin notify_email (not backend mailboxes)."""
+    addr = postmaster_addr.strip().lower()
+    virtual_mailbox_maps_lines.append(f"{addr} OK")
+    if admin_emails:
+        virtual_alias_maps_lines.append(f"{addr} {', '.join(admin_emails)}")
+        for email in admin_emails:
+            transport_line = f"{email} smtp:"
+            if transport_line not in admin_outbound_transports:
+                admin_outbound_transports.add(transport_line)
+                transport_maps_lines.append(transport_line)
+        return
+    logger.warning(
+        "%s: no admin notify_email configured; notifications will be rejected",
+        addr,
+    )
+    transport_maps_lines.append(f"{addr} {POSTMASTER_NO_ADMIN_TRANSPORT}")
+
+
 def regenerate_files() -> None:
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     ensure_mail_config_dirs()
@@ -188,32 +215,26 @@ def regenerate_files() -> None:
         virtual_alias_lines.append(f"{postfix_hostname} OK")
 
     virtual_alias_maps_lines: list[str] = []
-    postmaster_hostname_addr = f"postmaster@{postfix_hostname}"
-    virtual_mailbox_maps_lines.append(f"{postmaster_hostname_addr} OK")
-    if admin_emails:
-        virtual_alias_maps_lines.append(
-            f"{postmaster_hostname_addr} {', '.join(admin_emails)}"
-        )
-        for email in admin_emails:
-            transport_maps_lines.append(f"{email} smtp:")
-    else:
-        logger.warning(
-            "postmaster@%s: no admin notify_email configured; mail will be rejected",
-            postfix_hostname,
-        )
-        transport_maps_lines.append(
-            f"{postmaster_hostname_addr} {POSTMASTER_NO_ADMIN_TRANSPORT}"
-        )
+    admin_outbound_transports: set[str] = set()
+    _add_postmaster_routing(
+        f"postmaster@{postfix_hostname}",
+        admin_emails=admin_emails,
+        virtual_mailbox_maps_lines=virtual_mailbox_maps_lines,
+        virtual_alias_maps_lines=virtual_alias_maps_lines,
+        transport_maps_lines=transport_maps_lines,
+        admin_outbound_transports=admin_outbound_transports,
+    )
 
     for row in domains:
-        dest = primary_destination(int(row["id"]))
-        if not dest:
-            continue
-        host, port = dest
         name = row["name"].strip().lower()
-        postmaster = f"postmaster@{name}"
-        virtual_mailbox_maps_lines.append(f"{postmaster} OK")
-        transport_maps_lines.append(f"{postmaster} smtp:[{host}]:{port}")
+        _add_postmaster_routing(
+            f"postmaster@{name}",
+            admin_emails=admin_emails,
+            virtual_mailbox_maps_lines=virtual_mailbox_maps_lines,
+            virtual_alias_maps_lines=virtual_alias_maps_lines,
+            transport_maps_lines=transport_maps_lines,
+            admin_outbound_transports=admin_outbound_transports,
+        )
 
     for row in domains:
         if not row["relay_all_inbound"]:
@@ -363,7 +384,8 @@ def regenerate_files() -> None:
 
     SPAMASSASSIN_LOCAL_CF.write_text(build_local_cf(spam_settings), encoding="utf-8")
     AMAVIS_SPAM_OVERRIDES.write_text(
-        build_amavis_overrides(spam_settings), encoding="utf-8"
+        build_amavis_overrides(spam_settings, admin_emails=admin_emails),
+        encoding="utf-8",
     )
     write_caddyfile()
     write_docker_dns_compose_override()

@@ -255,3 +255,64 @@ class RegenerateCatchAllTest(unittest.TestCase):
 
         regenerate_files()
         self.assertFalse(stale.exists())
+
+    def test_postmaster_routes_to_admin_notify_email(self) -> None:
+        with db_module.db() as conn:
+            self._insert_domain(
+                conn,
+                "client.example",
+                destination=("mail.backend", 2525),
+            )
+            conn.execute(
+                """
+                INSERT INTO users (username, password_hash, role, totp_secret, mfa_enabled, notify_email)
+                VALUES ('admin', 'hash', 'admin', NULL, 0, 'Ops.Notify@Example.COM')
+                """
+            )
+            conn.commit()
+
+        with patch("app.regenerate.POSTFIX_HOSTNAME", "mx.example.com"):
+            regenerate_files()
+
+        alias_maps = (
+            self.postfix_generated / "virtual_alias_maps"
+        ).read_text(encoding="utf-8")
+        transport = (self.postfix_generated / "transport_maps").read_text(encoding="utf-8")
+        amavis = (
+            self.postfix_generated.parent.parent / "amavis" / "spam-overrides.conf"
+        )
+        amavis_overrides = amavis.read_text(encoding="utf-8")
+
+        self.assertIn("postmaster@mx.example.com ops.notify@example.com", alias_maps)
+        self.assertIn("postmaster@client.example ops.notify@example.com", alias_maps)
+        self.assertNotIn("postmaster@client.example smtp:[mail.backend]", transport)
+        self.assertIn("ops.notify@example.com smtp:", transport)
+        self.assertIn("@virus_admin = qw( ops.notify@example.com );", amavis_overrides)
+
+    def test_postmaster_rejected_without_admin_notify_email(self) -> None:
+        with db_module.db() as conn:
+            self._insert_domain(
+                conn,
+                "solo.example",
+                destination=("solo.backend", 25),
+            )
+            conn.commit()
+
+        with (
+            patch("app.regenerate.POSTFIX_HOSTNAME", "mx.example.com"),
+            self.assertLogs("app.regenerate", level="WARNING") as logs,
+        ):
+            regenerate_files()
+
+        transport = (self.postfix_generated / "transport_maps").read_text(encoding="utf-8")
+        self.assertIn(
+            "postmaster@mx.example.com error:5.1.3 Postmaster forwarding is not configured",
+            transport,
+        )
+        self.assertIn(
+            "postmaster@solo.example error:5.1.3 Postmaster forwarding is not configured",
+            transport,
+        )
+        self.assertTrue(
+            any("no admin notify_email configured" in message for message in logs.output)
+        )
