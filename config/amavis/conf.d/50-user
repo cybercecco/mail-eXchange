@@ -19,6 +19,9 @@ $sa_dsn_cutoff_level = 10;
 $sa_spam_subject_tag = '[SPAM] ';
 $sa_spam_modifies_subj = 1;
 
+# Do not prepend ***UNCHECKED*** when MIME parts could not be scanned (encrypted zip, etc.)
+$undecipherable_subject_tag = undef;
+
 @bypass_virus_checks_maps = (0);
 @bypass_spam_checks_maps  = (0);
 

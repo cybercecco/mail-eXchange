@@ -167,3 +167,18 @@ class SpamWhitelistGenerationTest(unittest.TestCase):
         local_cf = build_local_cf(settings)
         self.assertIn("whitelist_from *.amazon.com", local_cf)
         self.assertIn("whitelist_from *@bounces.amazon.com", local_cf)
+
+
+class AmavisStaticConfigTest(unittest.TestCase):
+    def test_user_config_disables_unchecked_subject_tag(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        for rel in (
+            "infra/amavis/amavisd.conf",
+            "config/amavis/conf.d/50-user",
+        ):
+            text = (repo_root / rel).read_text(encoding="utf-8")
+            self.assertIn(
+                "$undecipherable_subject_tag = undef;",
+                text,
+                rel,
+            )
