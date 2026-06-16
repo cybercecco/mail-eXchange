@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -316,3 +317,32 @@ class RegenerateCatchAllTest(unittest.TestCase):
         self.assertTrue(
             any("no admin notify_email configured" in message for message in logs.output)
         )
+
+    def test_regenerate_writes_postfix_main_override(self) -> None:
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                UPDATE postfix_settings
+                SET json_payload = ?
+                WHERE id = 1
+                """,
+                (
+                    json.dumps(
+                        {
+                            "message_size_limit": 20_971_520,
+                            "mailbox_size_limit": 62_914_560,
+                            "smtpd_timeout": 180,
+                        }
+                    ),
+                ),
+            )
+            conn.commit()
+
+        regenerate_files()
+
+        override_path = self.postfix_generated / "main.cf.override"
+        self.assertTrue(override_path.is_file())
+        content = override_path.read_text(encoding="utf-8")
+        self.assertIn("message_size_limit = 20971520", content)
+        self.assertIn("mailbox_size_limit = 62914560", content)
+        self.assertIn("smtpd_timeout = 180s", content)

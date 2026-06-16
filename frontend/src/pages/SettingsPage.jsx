@@ -4,6 +4,16 @@ import DnsRecordCard from "../components/DnsRecordCard";
 import { FormField } from "../components/FormField";
 import StatusBadge from "../components/StatusBadge";
 
+const BYTES_PER_MB = 1024 * 1024;
+
+function bytesToMb(bytes) {
+  return Math.round((bytes / BYTES_PER_MB) * 100) / 100;
+}
+
+function mbToBytes(mb) {
+  return Math.round(Number(mb) * BYTES_PER_MB);
+}
+
 export default function SettingsPage({ onError, isAdmin }) {
   const [form, setForm] = useState({
     public_url: "",
@@ -25,6 +35,15 @@ export default function SettingsPage({ onError, isAdmin }) {
   const [errorPreview, setErrorPreview] = useState(null);
   const [errorNotifyBusy, setErrorNotifyBusy] = useState(false);
   const [errorNotifyResult, setErrorNotifyResult] = useState("");
+
+  const [postfixForm, setPostfixForm] = useState({
+    message_size_mb: 10,
+    mailbox_size_mb: 50,
+    smtpd_timeout: 300
+  });
+  const [postfixLoading, setPostfixLoading] = useState(true);
+  const [postfixSaving, setPostfixSaving] = useState(false);
+  const [postfixSaved, setPostfixSaved] = useState(false);
 
   const enabledDomains = useMemo(() => domains.filter((d) => d.enabled), [domains]);
 
@@ -83,6 +102,31 @@ export default function SettingsPage({ onError, isAdmin }) {
   }, [onError, loadMailData]);
 
   useEffect(() => {
+    let cancelled = false;
+    async function loadPostfix() {
+      setPostfixLoading(true);
+      try {
+        const data = await api("/postfix");
+        if (!cancelled) {
+          setPostfixForm({
+            message_size_mb: bytesToMb(data.message_size_limit),
+            mailbox_size_mb: bytesToMb(data.mailbox_size_limit),
+            smtpd_timeout: data.smtpd_timeout
+          });
+        }
+      } catch (err) {
+        if (!cancelled) onError?.(err.message);
+      } finally {
+        if (!cancelled) setPostfixLoading(false);
+      }
+    }
+    loadPostfix();
+    return () => {
+      cancelled = true;
+    };
+  }, [onError]);
+
+  useEffect(() => {
     const match = mailboxesForDomain.find((m) => String(m.id) === String(testMailboxId));
     if (!match && mailboxesForDomain.length > 0) {
       setTestMailboxId(String(mailboxesForDomain[0].id));
@@ -111,6 +155,29 @@ export default function SettingsPage({ onError, isAdmin }) {
       onError?.(err.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handlePostfixSubmit(event) {
+    event.preventDefault();
+    setPostfixSaving(true);
+    setPostfixSaved(false);
+    onError?.("");
+    try {
+      const body = {
+        message_size_limit: mbToBytes(postfixForm.message_size_mb),
+        mailbox_size_limit: mbToBytes(postfixForm.mailbox_size_mb),
+        smtpd_timeout: Number(postfixForm.smtpd_timeout)
+      };
+      await api("/postfix", {
+        method: "PUT",
+        body: JSON.stringify(body)
+      });
+      setPostfixSaved(true);
+    } catch (err) {
+      onError?.(err.message);
+    } finally {
+      setPostfixSaving(false);
     }
   }
 
@@ -231,6 +298,83 @@ export default function SettingsPage({ onError, isAdmin }) {
                       : "Impostazioni salvate. Applicazione DNS non completata.")}
                 </span>
               )}
+            </div>
+          </form>
+        )}
+      </div>
+
+      <div className="panel">
+        <h3>Parametri Postfix</h3>
+        <p className="panel-hint">
+          Limiti generali del server SMTP in transito. Dopo il salvataggio i valori vengono
+          applicati automaticamente a Postfix (ricarica configurazione).
+        </p>
+        {postfixLoading ? (
+          <p className="empty-state">Caricamento...</p>
+        ) : (
+          <form onSubmit={handlePostfixSubmit} className="form-grid">
+            <FormField
+              label="Dimensione massima messaggio (MB)"
+              htmlFor="postfix-message-size"
+              hint="message_size_limit — default Postfix 10 MB"
+            >
+              <input
+                id="postfix-message-size"
+                type="number"
+                min={1}
+                max={100}
+                step={0.1}
+                value={postfixForm.message_size_mb}
+                onChange={(e) =>
+                  setPostfixForm({ ...postfixForm, message_size_mb: e.target.value })
+                }
+                required
+                disabled={postfixSaving}
+              />
+            </FormField>
+            <FormField
+              label="Dimensione massima casella (MB)"
+              htmlFor="postfix-mailbox-size"
+              hint="mailbox_size_limit — deve essere ≥ dimensione messaggio"
+            >
+              <input
+                id="postfix-mailbox-size"
+                type="number"
+                min={1}
+                max={500}
+                step={0.1}
+                value={postfixForm.mailbox_size_mb}
+                onChange={(e) =>
+                  setPostfixForm({ ...postfixForm, mailbox_size_mb: e.target.value })
+                }
+                required
+                disabled={postfixSaving}
+              />
+            </FormField>
+            <FormField
+              label="Timeout client SMTP (secondi)"
+              htmlFor="postfix-smtpd-timeout"
+              hint="smtpd_timeout — tempo massimo di inattività del client"
+            >
+              <input
+                id="postfix-smtpd-timeout"
+                type="number"
+                min={30}
+                max={3600}
+                step={1}
+                value={postfixForm.smtpd_timeout}
+                onChange={(e) =>
+                  setPostfixForm({ ...postfixForm, smtpd_timeout: e.target.value })
+                }
+                required
+                disabled={postfixSaving}
+              />
+            </FormField>
+            <div className="form-actions">
+              <button type="submit" className="btn-primary" disabled={postfixSaving}>
+                {postfixSaving ? "Salvataggio..." : "Salva parametri Postfix"}
+              </button>
+              {postfixSaved && <span className="mfa-success">Parametri Postfix salvati.</span>}
             </div>
           </form>
         )}

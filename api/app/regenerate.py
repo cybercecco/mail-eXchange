@@ -16,6 +16,7 @@ from app.relay_ips import (
     relay_restriction_class_name,
     relay_source_ips_from_db,
 )
+from app.postfix_settings import build_main_override, get_settings as get_postfix_settings
 from app.spamassassin import build_amavis_overrides, build_local_cf
 from app.system_settings import POSTFIX_HOSTNAME, get_settings, write_docker_dns_compose_override
 
@@ -389,6 +390,10 @@ def regenerate_files() -> None:
     )
     write_caddyfile()
     write_docker_dns_compose_override()
+    (POSTFIX_GENERATED_DIR / "main.cf.override").write_text(
+        build_main_override(get_postfix_settings()),
+        encoding="utf-8",
+    )
 
     # Legacy single-key path (first enabled domain) for older tooling
     legacy_key = DKIM_PUB_DIR / f"{domains[0]['name']}.pub" if domains else None

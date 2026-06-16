@@ -138,6 +138,26 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS postfix_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                json_payload TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO postfix_settings (id, json_payload) VALUES (1, ?)",
+            (
+                json.dumps(
+                    {
+                        "message_size_limit": 10_240_000,
+                        "mailbox_size_limit": 51_200_000,
+                        "smtpd_timeout": 300,
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS system_settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 json_payload TEXT NOT NULL

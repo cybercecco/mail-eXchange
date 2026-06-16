@@ -334,6 +334,7 @@ reload_postfix_maps() {
   sync_generated_maps
   apply_relay_restriction_classes
   apply_relay_mynetworks
+  apply_postfix_overrides
   postfix reload 2>/dev/null || true
 }
 
@@ -389,10 +390,28 @@ apply_relay_mynetworks() {
   fi
 }
 
+apply_postfix_overrides() {
+  local override="${SOURCE_GENERATED}/main.cf.override"
+  [[ -f "${override}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%%#*}"
+    line="$(printf '%s' "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ -n "${line}" ]] || continue
+    [[ "${line}" == *=* ]] || continue
+    local key="${line%%=*}"
+    local value="${line#*=}"
+    key="$(printf '%s' "${key}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    value="$(printf '%s' "${value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ -n "${key}" && -n "${value}" ]] || continue
+    postconf -e "${key} = ${value}"
+  done < "${override}"
+}
+
 if [[ -n "${MYHOSTNAME:-}" ]]; then
   postconf -e "myhostname = ${MYHOSTNAME}"
 fi
 apply_relay_mynetworks
+apply_postfix_overrides
 install_smtpd_tls_certs
 # Debian Postfix ships virtual_mailbox_base unset but postconf may expose it as empty;
 # virtual(8) then fatals when transport_maps has no match.
@@ -467,6 +486,7 @@ watch_maps() {
       "${SOURCE_GENERATED}/relay_sender_access"
       "${SOURCE_GENERATED}/relay_restriction_classes"
       "${SOURCE_GENERATED}/relay_mynetworks.cidr"
+      "${SOURCE_GENERATED}/main.cf.override"
     )
     shopt -s nullglob
     local cidr_files=("${SOURCE_GENERATED}"/relay_client_access_*.cidr)

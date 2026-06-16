@@ -79,6 +79,7 @@ from app.system_settings import (
     update_settings,
 )
 from app.mailbox_import import import_mailboxes_csv
+from app.postfix_settings import PostfixSettings, get_settings as get_postfix_settings, persist_settings as persist_postfix_settings
 from app.regenerate import regenerate_files
 from app.spamassassin import SpamSettings, normalize_settings
 from app.sync import (
@@ -649,6 +650,18 @@ def set_spamassassin(payload: SpamSettings, _user: CurrentUser) -> dict:
             (json.dumps(normalized),),
         )
         conn.commit()
+    regenerate_files()
+    return {"status": "updated", "settings": normalized}
+
+
+@app.get("/api/postfix")
+def get_postfix(_user: CurrentUser) -> dict:
+    return get_postfix_settings()
+
+
+@app.put("/api/postfix")
+def set_postfix(payload: PostfixSettings, _user: CurrentUser) -> dict:
+    normalized = persist_postfix_settings(payload.model_dump())
     regenerate_files()
     return {"status": "updated", "settings": normalized}
 
