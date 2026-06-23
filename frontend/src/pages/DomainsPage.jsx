@@ -7,10 +7,20 @@ import { CheckboxField, FormField } from "../components/FormField";
 
 function destinationLabel(dest) {
   const base = `${dest.host}:${dest.port}`;
-  return dest.label && dest.label !== dest.host ? `${dest.label} — ${base}` : base;
+  const imapHost = dest.imap_auth_host || dest.host;
+  const imapPort = dest.imap_auth_port || 993;
+  const imapSuffix = imapHost !== dest.host || imapPort !== 993 ? ` · IMAP ${imapHost}:${imapPort}` : "";
+  const label = dest.label && dest.label !== dest.host ? `${dest.label} — ${base}` : base;
+  return `${label}${imapSuffix}`;
 }
 
-const emptyDestForm = { label: "", host: "", port: "25" };
+const emptyDestForm = {
+  label: "",
+  host: "",
+  port: "25",
+  imap_auth_host: "",
+  imap_auth_port: ""
+};
 
 const SETTINGS_TABS = [
   { id: "generale", label: "Generale" },
@@ -109,7 +119,13 @@ export default function DomainsPage({
   function destEditDraftFor(domainId, dest) {
     const key = destEditKey(domainId, dest.id);
     if (destEditDrafts[key]) return destEditDrafts[key];
-    return { label: dest.label || "", host: dest.host, port: String(dest.port) };
+    return {
+      label: dest.label || "",
+      host: dest.host,
+      port: String(dest.port),
+      imap_auth_host: dest.imap_auth_host || "",
+      imap_auth_port: dest.imap_auth_port ? String(dest.imap_auth_port) : ""
+    };
   }
 
   function setDestEditDraft(domainId, destinationId, patch) {
@@ -150,7 +166,10 @@ export default function DomainsPage({
     return (
       draft.label.trim() !== (dest.label || "").trim() ||
       draft.host.trim().toLowerCase() !== dest.host.toLowerCase() ||
-      Number(draft.port) !== Number(dest.port)
+      Number(draft.port) !== Number(dest.port) ||
+      draft.imap_auth_host.trim().toLowerCase() !== (dest.imap_auth_host || "").trim().toLowerCase() ||
+      (draft.imap_auth_port ? Number(draft.imap_auth_port) : null) !==
+        (dest.imap_auth_port ?? null)
     );
   }
 
@@ -168,7 +187,9 @@ export default function DomainsPage({
         body: JSON.stringify({
           label: draft.label.trim(),
           host: draft.host.trim(),
-          port: Number(draft.port) || 25
+          port: Number(draft.port) || 25,
+          imap_auth_host: draft.imap_auth_host.trim() || null,
+          imap_auth_port: draft.imap_auth_port ? Number(draft.imap_auth_port) : null
         })
       });
       onSyncWarning?.(result);
@@ -247,7 +268,9 @@ export default function DomainsPage({
         body: JSON.stringify({
           label: form.label.trim(),
           host: form.host.trim(),
-          port: Number(form.port) || 25
+          port: Number(form.port) || 25,
+          imap_auth_host: form.imap_auth_host.trim() || null,
+          imap_auth_port: form.imap_auth_port ? Number(form.imap_auth_port) : null
         })
       });
       onSyncWarning?.(result);
@@ -639,6 +662,45 @@ export default function DomainsPage({
                                         disabled={editBusy}
                                       />
                                     </FormField>
+                                    <FormField
+                                      label="IMAP auth host"
+                                      htmlFor={`dest-edit-imap-host-${dest.id}`}
+                                      hint="Default: host destinazione"
+                                      hintAfter
+                                    >
+                                      <input
+                                        id={`dest-edit-imap-host-${dest.id}`}
+                                        placeholder="mdaemon.example.com"
+                                        value={editDraft.imap_auth_host}
+                                        onChange={(e) =>
+                                          setDestEditDraft(item.id, dest.id, {
+                                            imap_auth_host: e.target.value
+                                          })
+                                        }
+                                        disabled={editBusy}
+                                      />
+                                    </FormField>
+                                    <FormField
+                                      label="IMAP auth porta"
+                                      htmlFor={`dest-edit-imap-port-${dest.id}`}
+                                      hint="Default: 993"
+                                      hintAfter
+                                    >
+                                      <input
+                                        id={`dest-edit-imap-port-${dest.id}`}
+                                        type="number"
+                                        min={1}
+                                        max={65535}
+                                        placeholder="993"
+                                        value={editDraft.imap_auth_port}
+                                        onChange={(e) =>
+                                          setDestEditDraft(item.id, dest.id, {
+                                            imap_auth_port: e.target.value
+                                          })
+                                        }
+                                        disabled={editBusy}
+                                      />
+                                    </FormField>
                                     <div className="form-actions">
                                       <button
                                         type="submit"
@@ -723,6 +785,39 @@ export default function DomainsPage({
                             placeholder="25"
                             value={destFormFor(item.id).port}
                             onChange={(e) => setDestFormFor(item.id, { port: e.target.value })}
+                            disabled={busy}
+                          />
+                        </FormField>
+                        <FormField
+                          label="IMAP auth host"
+                          htmlFor={`dest-imap-host-${item.id}`}
+                          hint="Default: host destinazione"
+                          hintAfter
+                        >
+                          <input
+                            id={`dest-imap-host-${item.id}`}
+                            placeholder="mdaemon.example.com"
+                            value={destFormFor(item.id).imap_auth_host}
+                            onChange={(e) =>
+                              setDestFormFor(item.id, { imap_auth_host: e.target.value })
+                            }
+                            disabled={busy}
+                          />
+                        </FormField>
+                        <FormField
+                          label="IMAP auth porta"
+                          htmlFor={`dest-imap-port-${item.id}`}
+                          hint="Default: 993 (SSL) o 143 (STARTTLS)"
+                          hintAfter
+                        >
+                          <input
+                            id={`dest-imap-port-${item.id}`}
+                            type="number"
+                            placeholder="993"
+                            value={destFormFor(item.id).imap_auth_port}
+                            onChange={(e) =>
+                              setDestFormFor(item.id, { imap_auth_port: e.target.value })
+                            }
                             disabled={busy}
                           />
                         </FormField>

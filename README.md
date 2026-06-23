@@ -234,7 +234,7 @@ Il ricevente crea il dominio se assente, upsert/delete caselle, aggiorna `dkim_s
 
 Postfix submission (**porta 587**, mappata con `SUBMISSION_PUBLISHED_PORT`):
 
-- **SASL** (PLAIN/LOGIN via `sasldb`) — autenticazione client per relay generico.
+- **SASL** (PLAIN/LOGIN via `saslauthd` + verifica IMAP sul server MDaemon del dominio) — autenticazione client mobile/remote con email e password casella.
 - **IP per dominio** — tab Relay nel dominio: lista CIDR; envelope sender `@dominio` autorizza relay da quegli IP senza SASL.
 
 Restrizioni (`smtpd_relay_restrictions`):

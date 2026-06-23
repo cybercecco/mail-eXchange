@@ -98,6 +98,8 @@ def settings_for_api(settings: dict | None = None) -> dict:
     data.pop("cloudflare_api_token", None)
     data["caddy_http_port"] = DEFAULT_CADDY_HTTP_PORT
     data["caddy_https_port"] = DEFAULT_CADDY_HTTPS_PORT
+    data["postfix_hostname"] = POSTFIX_HOSTNAME
+    data["smtp_submission_port"] = 587
     return data
 
 

@@ -17,21 +17,19 @@ MAP_BASENAMES=(
   relay_restriction_classes
 )
 
-sync_sasl_users() {
-  local passwd_file="/data/sasl/relay_passwd"
-  mkdir -p /data/sasl
-  rm -f /etc/sasldb2
-  [[ -f "${passwd_file}" ]] || { touch "${passwd_file}"; return 0; }
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    line="${line%%#*}"
-    line="$(printf '%s' "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    [[ -n "${line}" ]] || continue
-    local user="${line%%:*}"
-    local pass="${line#*:}"
-    [[ -n "${user}" && -n "${pass}" && "${user}" != "${line}" ]] || continue
-    # saslpasswd2 -p reads the password from stdin, not as a password flag.
-    printf '%s\n' "${pass}" | saslpasswd2 -c -p "${user}" 2>/dev/null || true
-  done < "${passwd_file}"
+sync_saslauthd() {
+  mkdir -p /var/run/saslauthd /data/sasl
+  if pgrep -x saslauthd >/dev/null 2>&1; then
+    return 0
+  fi
+  saslauthd -a pam -m /var/run/saslauthd -c -n 5
+}
+
+ensure_saslauthd() {
+  mkdir -p /var/run/saslauthd
+  chown root:sasl /var/run/saslauthd 2>/dev/null || true
+  chmod 755 /var/run/saslauthd
+  sync_saslauthd
 }
 
 caddy_cert_paths() {
@@ -420,7 +418,7 @@ install_smtpd_tls_certs
 postconf -X virtual_mailbox_base 2>/dev/null || true
 
 mkdir -p /etc/postfix/sasl
-sync_sasl_users
+ensure_saslauthd
 
 configure_submission() {
   if grep -qE '^submission[[:space:]]+inet' /etc/postfix/master.cf; then
@@ -474,17 +472,16 @@ postconf -e "maillog_file_prefixes = /var, /dev/stdout, /data/logs"
 postconf -e "maillog_file = /data/logs/postfix.log"
 tail -F /data/logs/postfix.log &
 
-watch_sasl_users() {
-  local passwd_file="/data/sasl/relay_passwd"
+watch_imap_auth_config() {
+  local cfg="/data/sasl/imap_auth.json"
   local old_sum=""
   while true; do
     local current_sum=""
-    if [[ -f "${passwd_file}" ]]; then
-      current_sum="$(sha256sum "${passwd_file}" | awk '{print $1}')"
+    if [[ -f "${cfg}" ]]; then
+      current_sum="$(sha256sum "${cfg}" | awk '{print $1}')"
     fi
     if [[ "${current_sum}" != "${old_sum}" ]]; then
-      sync_sasl_users
-      postfix reload 2>/dev/null || true
+      ensure_saslauthd
       old_sum="${current_sum}"
     fi
     sleep 10
@@ -532,7 +529,7 @@ startup_map_bootstrap() {
 sync_generated_maps
 startup_map_bootstrap &
 watch_maps &
-watch_sasl_users &
+watch_imap_auth_config &
 
 watch_tls_certs() {
   local hostname="${MYHOSTNAME:-}"

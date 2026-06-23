@@ -12,16 +12,39 @@ class DestinationCreate(BaseModel):
     label: str = Field(default="", max_length=120)
     host: str = Field(min_length=1, max_length=253)
     port: int = Field(default=25, ge=1, le=65535)
+    imap_auth_host: str | None = Field(default=None, max_length=253)
+    imap_auth_port: int | None = Field(default=None, ge=1, le=65535)
 
 
 class DestinationUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=120)
     host: str | None = Field(default=None, min_length=1, max_length=253)
     port: int | None = Field(default=None, ge=1, le=65535)
+    imap_auth_host: str | None = Field(default=None, max_length=253)
+    imap_auth_port: int | None = Field(default=None, ge=1, le=65535)
 
 
 def _normalize_host(host: str) -> str:
     return host.strip().lower()
+
+
+def _normalize_optional_host(host: str | None) -> str | None:
+    if host is None:
+        return None
+    normalized = host.strip().lower()
+    return normalized or None
+
+
+def _destination_public(row) -> dict:
+    return {
+        "id": row["id"],
+        "domain_id": row["domain_id"],
+        "label": row["label"],
+        "host": row["host"],
+        "port": int(row["port"]),
+        "imap_auth_host": row["imap_auth_host"],
+        "imap_auth_port": int(row["imap_auth_port"]) if row["imap_auth_port"] is not None else None,
+    }
 
 
 def list_destinations_for_domain(domain_id: int) -> list[dict]:
@@ -29,28 +52,28 @@ def list_destinations_for_domain(domain_id: int) -> list[dict]:
     with db() as conn:
         rows = conn.execute(
             """
-            SELECT id, domain_id, label, host, port
+            SELECT id, domain_id, label, host, port, imap_auth_host, imap_auth_port
             FROM domain_destinations
             WHERE domain_id = ?
             ORDER BY label, host, port
             """,
             (domain_id,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [_destination_public(row) for row in rows]
 
 
 def list_all_destinations_by_domain() -> dict[int, list[dict]]:
     with db() as conn:
         rows = conn.execute(
             """
-            SELECT id, domain_id, label, host, port
+            SELECT id, domain_id, label, host, port, imap_auth_host, imap_auth_port
             FROM domain_destinations
             ORDER BY domain_id, label, host, port
             """
         ).fetchall()
     grouped: dict[int, list[dict]] = {}
     for row in rows:
-        grouped.setdefault(row["domain_id"], []).append(dict(row))
+        grouped.setdefault(row["domain_id"], []).append(_destination_public(row))
     return grouped
 
 
@@ -71,15 +94,23 @@ def create_destination(domain_id: int, payload: DestinationCreate) -> dict:
                 ),
             )
     host = _normalize_host(payload.host)
+    imap_auth_host = _normalize_optional_host(payload.imap_auth_host)
     label = (payload.label or host).strip()
     with db() as conn:
         try:
             cursor = conn.execute(
                 """
-                INSERT INTO domain_destinations (domain_id, label, host, port)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO domain_destinations (domain_id, label, host, port, imap_auth_host, imap_auth_port)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (domain_id, label, host, int(payload.port)),
+                (
+                    domain_id,
+                    label,
+                    host,
+                    int(payload.port),
+                    imap_auth_host,
+                    payload.imap_auth_port,
+                ),
             )
             conn.commit()
         except sqlite3.IntegrityError as exc:
@@ -88,7 +119,15 @@ def create_destination(domain_id: int, payload: DestinationCreate) -> dict:
                 detail="This destination server already exists for the domain",
             ) from exc
     touch_domain_updated_at(domain_id)
-    return {"id": cursor.lastrowid, "domain_id": domain_id, "label": label, "host": host, "port": payload.port}
+    return {
+        "id": cursor.lastrowid,
+        "domain_id": domain_id,
+        "label": label,
+        "host": host,
+        "port": payload.port,
+        "imap_auth_host": imap_auth_host,
+        "imap_auth_port": payload.imap_auth_port,
+    }
 
 
 def update_destination(
@@ -110,6 +149,14 @@ def update_destination(
         label = payload.label if payload.label is not None else row["label"]
         host = _normalize_host(payload.host) if payload.host is not None else old_host
         port = int(payload.port) if payload.port is not None else old_port
+        if payload.imap_auth_host is None:
+            imap_auth_host = row["imap_auth_host"]
+        else:
+            imap_auth_host = _normalize_optional_host(payload.imap_auth_host)
+        if payload.imap_auth_port is None:
+            imap_auth_port = row["imap_auth_port"]
+        else:
+            imap_auth_port = payload.imap_auth_port
         if not host:
             raise HTTPException(status_code=400, detail="Host is required")
         label = (label or host).strip() or host
@@ -118,10 +165,10 @@ def update_destination(
             conn.execute(
                 """
                 UPDATE domain_destinations
-                SET label = ?, host = ?, port = ?
+                SET label = ?, host = ?, port = ?, imap_auth_host = ?, imap_auth_port = ?
                 WHERE id = ? AND domain_id = ?
                 """,
-                (label, host, port, destination_id, domain_id),
+                (label, host, port, imap_auth_host, imap_auth_port, destination_id, domain_id),
             )
             mailboxes_updated = 0
             if routing_changed:
@@ -150,6 +197,8 @@ def update_destination(
         "label": label,
         "host": host,
         "port": port,
+        "imap_auth_host": imap_auth_host,
+        "imap_auth_port": int(imap_auth_port) if imap_auth_port is not None else None,
         "mailboxes_updated": mailboxes_updated,
     }
 

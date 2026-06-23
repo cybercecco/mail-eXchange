@@ -193,10 +193,17 @@ def init_db() -> None:
                 label TEXT NOT NULL DEFAULT '',
                 host TEXT NOT NULL,
                 port INTEGER NOT NULL DEFAULT 25,
+                imap_auth_host TEXT,
+                imap_auth_port INTEGER,
                 UNIQUE(domain_id, host, port)
             )
             """
         )
+        dest_cols = _table_columns(conn, "domain_destinations")
+        if "imap_auth_host" not in dest_cols:
+            conn.execute("ALTER TABLE domain_destinations ADD COLUMN imap_auth_host TEXT")
+        if "imap_auth_port" not in dest_cols:
+            conn.execute("ALTER TABLE domain_destinations ADD COLUMN imap_auth_port INTEGER")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
