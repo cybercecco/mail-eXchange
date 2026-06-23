@@ -213,6 +213,18 @@ def init_db() -> None:
         user_cols = _table_columns(conn, "users")
         if "notify_email" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN notify_email TEXT")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS relay_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                password_hash TEXT NOT NULL,
+                password_enc TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
         _migrate_legacy_mailboxes(conn)
         _backfill_mailbox_domains(conn)
         conn.commit()

@@ -11,6 +11,7 @@ import SettingsPage from "./pages/SettingsPage";
 import SystemPage from "./pages/SystemPage";
 import TrafficPage from "./pages/TrafficPage";
 import UsersPage from "./pages/UsersPage";
+import RelayUsersPage from "./pages/RelayUsersPage";
 
 export default function Dashboard({ user, onLogout, onUserUpdate }) {
   const { theme, toggleTheme } = useTheme();
@@ -36,6 +37,12 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
   const [importBusy, setImportBusy] = useState(false);
   const [users, setUsers] = useState([]);
   const [userForm, setUserForm] = useState({ username: "", password: "", role: "user", notify_email: "" });
+  const [relayUsers, setRelayUsers] = useState([]);
+  const [relayUserForm, setRelayUserForm] = useState({
+    username: "",
+    password: "",
+    enabled: true
+  });
   const [error, setError] = useState("");
 
   const isAdmin = user.role === "admin";
@@ -90,6 +97,15 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
     }
   }, [isAdmin, handleAuthError]);
 
+  const loadRelayUsers = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      setRelayUsers(await api("/relay-users"));
+    } catch (err) {
+      handleAuthError(err);
+    }
+  }, [isAdmin, handleAuthError]);
+
   async function load() {
     setError("");
     try {
@@ -131,7 +147,10 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
     if (activePage === "users" && isAdmin) {
       loadUsers();
     }
-  }, [activePage, isAdmin, loadUsers]);
+    if (activePage === "relay-users" && isAdmin) {
+      loadRelayUsers();
+    }
+  }, [activePage, isAdmin, loadUsers, loadRelayUsers]);
 
   async function addDomain(event) {
     event.preventDefault();
@@ -322,6 +341,49 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
     }
   }
 
+  async function addRelayUser(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      await api("/relay-users", {
+        method: "POST",
+        body: JSON.stringify({
+          username: relayUserForm.username.trim(),
+          password: relayUserForm.password,
+          enabled: relayUserForm.enabled
+        })
+      });
+      setRelayUserForm({ username: "", password: "", enabled: true });
+      await loadRelayUsers();
+    } catch (err) {
+      handleAuthError(err);
+    }
+  }
+
+  async function updateRelayUser(userId, patch) {
+    setError("");
+    try {
+      await api(`/relay-users/${userId}`, {
+        method: "PUT",
+        body: JSON.stringify(patch)
+      });
+      await loadRelayUsers();
+    } catch (err) {
+      handleAuthError(err);
+    }
+  }
+
+  async function deleteRelayUser(userId, username) {
+    if (!confirm(`Eliminare l'utente relay ${username}?`)) return;
+    setError("");
+    try {
+      await api(`/relay-users/${userId}`, { method: "DELETE" });
+      await loadRelayUsers();
+    } catch (err) {
+      handleAuthError(err);
+    }
+  }
+
   function handleLogout() {
     api("/auth/logout", { method: "POST" }).catch(() => {});
     onLogout();
@@ -412,6 +474,24 @@ export default function Dashboard({ user, onLogout, onUserUpdate }) {
             onUpdateUser={updateAppUser}
             onDeleteUser={deleteAppUser}
             currentUserId={user.id}
+          />
+        );
+      case "relay-users":
+        if (!isAdmin) {
+          return (
+            <p className="empty-state">
+              Solo gli amministratori possono gestire gli utenti relay SMTP.
+            </p>
+          );
+        }
+        return (
+          <RelayUsersPage
+            relayUsers={relayUsers}
+            relayUserForm={relayUserForm}
+            setRelayUserForm={setRelayUserForm}
+            onAddRelayUser={addRelayUser}
+            onUpdateRelayUser={updateRelayUser}
+            onDeleteRelayUser={deleteRelayUser}
           />
         );
       default:

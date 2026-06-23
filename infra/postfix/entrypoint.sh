@@ -20,7 +20,8 @@ MAP_BASENAMES=(
 sync_sasl_users() {
   local passwd_file="/data/sasl/relay_passwd"
   mkdir -p /data/sasl
-  touch "${passwd_file}"
+  rm -f /etc/sasldb2
+  [[ -f "${passwd_file}" ]] || { touch "${passwd_file}"; return 0; }
   while IFS= read -r line || [[ -n "${line}" ]]; do
     line="${line%%#*}"
     line="$(printf '%s' "${line}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -28,7 +29,8 @@ sync_sasl_users() {
     local user="${line%%:*}"
     local pass="${line#*:}"
     [[ -n "${user}" && -n "${pass}" && "${user}" != "${line}" ]] || continue
-    saslpasswd2 -c -p "${pass}" "${user}" 2>/dev/null || true
+    # saslpasswd2 -p reads the password from stdin, not as a password flag.
+    printf '%s\n' "${pass}" | saslpasswd2 -c -p "${user}" 2>/dev/null || true
   done < "${passwd_file}"
 }
 
@@ -472,6 +474,23 @@ postconf -e "maillog_file_prefixes = /var, /dev/stdout, /data/logs"
 postconf -e "maillog_file = /data/logs/postfix.log"
 tail -F /data/logs/postfix.log &
 
+watch_sasl_users() {
+  local passwd_file="/data/sasl/relay_passwd"
+  local old_sum=""
+  while true; do
+    local current_sum=""
+    if [[ -f "${passwd_file}" ]]; then
+      current_sum="$(sha256sum "${passwd_file}" | awk '{print $1}')"
+    fi
+    if [[ "${current_sum}" != "${old_sum}" ]]; then
+      sync_sasl_users
+      postfix reload 2>/dev/null || true
+      old_sum="${current_sum}"
+    fi
+    sleep 10
+  done
+}
+
 watch_maps() {
   local old_sum=""
   while true; do
@@ -513,6 +532,7 @@ startup_map_bootstrap() {
 sync_generated_maps
 startup_map_bootstrap &
 watch_maps &
+watch_sasl_users &
 
 watch_tls_certs() {
   local hostname="${MYHOSTNAME:-}"

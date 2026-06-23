@@ -92,6 +92,14 @@ from app.sync import (
     verify_sync_auth,
 )
 from app.traffic_stats import collect_queue_listing, collect_traffic_stats, read_pipeline_snapshot
+from app.relay_users import (
+    RelayUserCreate,
+    RelayUserUpdate,
+    create_relay_user,
+    delete_relay_user,
+    list_relay_users,
+    update_relay_user,
+)
 from app.users import UserCreate, UserUpdate, create_user, delete_user, list_users, update_user
 
 app = FastAPI(title="Mail Exchange Control Plane")
@@ -248,6 +256,32 @@ def api_update_user(user_id: int, payload: UserUpdate, admin: AdminUser) -> dict
 @app.delete("/api/users/{user_id}")
 def api_delete_user(user_id: int, admin: AdminUser) -> dict:
     result = delete_user(user_id, admin)
+    regenerate_files()
+    return result
+
+
+@app.get("/api/relay-users")
+def api_list_relay_users(_admin: AdminUser) -> list[dict]:
+    return list_relay_users()
+
+
+@app.post("/api/relay-users")
+def api_create_relay_user(payload: RelayUserCreate, _admin: AdminUser) -> dict:
+    result = create_relay_user(payload)
+    regenerate_files()
+    return result
+
+
+@app.put("/api/relay-users/{user_id}")
+def api_update_relay_user(user_id: int, payload: RelayUserUpdate, _admin: AdminUser) -> dict:
+    result = update_relay_user(user_id, payload)
+    regenerate_files()
+    return result
+
+
+@app.delete("/api/relay-users/{user_id}")
+def api_delete_relay_user(user_id: int, _admin: AdminUser) -> dict:
+    result = delete_relay_user(user_id)
     regenerate_files()
     return result
 

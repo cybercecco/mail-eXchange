@@ -28,7 +28,8 @@ const CONFIG_NAV = {
   label: "Configurazione",
   items: [
     { id: "settings", label: "Sistema & test mail" },
-    { id: "users", label: "Utenti" }
+    { id: "users", label: "Utenti" },
+    { id: "relay-users", label: "Relay mobile" }
   ]
 };
 
