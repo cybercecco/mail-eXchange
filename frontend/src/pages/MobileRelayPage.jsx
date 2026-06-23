@@ -28,6 +28,13 @@ export default function MobileRelayPage({ domains, settings, settingsLoading }) 
           I relay da IP fidati (<code>mynetworks</code> / IP sorgenti per dominio) restano
           disponibili <strong>senza autenticazione</strong>.
         </p>
+        <p>
+          Il server SMTP mostrato sotto è quello del <strong>nodo corrente</strong> (da{" "}
+          <code>POSTFIX_HOSTNAME</code>). In installazioni multi-nodo ogni dominio può risiedere su
+          un solo server: es. <code>vetrobalsamo.com</code> usa{" "}
+          <code>smtp.vetrobalsamo.com</code> sul nodo <code>192.168.1.69</code>, non il primario{" "}
+          <code>smtp.inxpire.support</code>.
+        </p>
       </header>
 
       <div className="panel">

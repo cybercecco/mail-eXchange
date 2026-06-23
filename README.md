@@ -228,6 +228,8 @@ Il ricevente crea il dominio se assente, upsert/delete caselle, aggiorna `dkim_s
 
 **MX:** ogni nodo esporta i propri hostname SMTP; il peer non modifica il DNS pubblico ma conserva gli hint per evidenziare in UI i record MX mancanti in un cluster multi-nodo.
 
+**Domini su un solo nodo:** non tutti i domini devono essere replicati. Esempio produzione: `moretto.mobi` sul primario (`172.22.11.125`, `smtp.inxpire.support`); `vetrobalsamo.com` e `iot.vetrobalsamo.com` solo sul secondario (`192.168.1.69`, `smtp.vetrobalsamo.com`) senza `sibling_fqdn` né sync verso il primario. Il relay mobile Android per `@vetrobalsamo.com` usa **solo** `smtp.vetrobalsamo.com:587` con verifica IMAP su MDaemon `192.168.1.70:143` (STARTTLS).
+
 ---
 
 ## Relay in uscita (SASL + IP per dominio) / Outbound relay
@@ -428,7 +430,7 @@ Richiede un file env locale (`.env.production` per il nodo A, oppure terzo argom
 
 #### Bootstrap nodo B (TLS e Cloudflare)
 
-1. Creare `.env.production.secondary` da `.env.production.secondary.example` con `POSTFIX_HOSTNAME`, `PUBLIC_HOSTNAME` e `CADDY_DOMAIN` = FQDN del nodo (es. `smtp.vetrobalsamo.com`). Configurare la chiave sync per dominio nel tab **Cluster** su entrambi i nodi.
+1. Creare `.env.production.secondary` da `.env.production.secondary.example` con `POSTFIX_HOSTNAME`, `PUBLIC_HOSTNAME` e `CADDY_DOMAIN` = FQDN del nodo (es. `smtp.vetrobalsamo.com`). Per domini **solo su un nodo** (es. `vetrobalsamo.com` su `192.168.1.69`) lasciare `sibling_fqdn` vuoto: non serve sync cluster verso il primario.
 2. Deploy: `./deploy.sh root@192.168.1.69 /opt/mail-exchange .env.production.secondary`
 3. Aprire **`http://<fqdn-o-ip>:60080`** (es. `http://192.168.1.69:60080`) — la UI è raggiungibile senza certificato valido.
 4. Login admin → **Configurazione** → verificare **URL pubblico** = FQDN del nodo.
