@@ -374,6 +374,10 @@ apply_relay_restriction_classes() {
 apply_relay_mynetworks() {
   local relay_cidr="${GENERATED_DIR}/relay_mynetworks.cidr"
   local base="${MYNETWORKS:-127.0.0.0/8 [::1]/128}"
+  # mxnet may use 100.64.0.0/10 (Docker/Tailscale CGNAT); Amavis returns mail on :10025.
+  if [[ "${base}" != *"100.64.0.0/10"* ]]; then
+    base="${base} 100.64.0.0/10"
+  fi
   if [[ ! -f "${relay_cidr}" ]]; then
     shopt -s nullglob
     local cidr_files=("${GENERATED_DIR}"/relay_client_access_*.cidr)
