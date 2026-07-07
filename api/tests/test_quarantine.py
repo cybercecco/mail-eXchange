@@ -182,3 +182,4 @@ class AmavisStaticConfigTest(unittest.TestCase):
                 text,
                 rel,
             )
+            self.assertIn("100.64.0.0/10", text, rel)
